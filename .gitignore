@@ -1,0 +1,13 @@
+# секреты и рантайм
+.env
+feed_enricher/cache/
+# бэкапы от ручных деплоев
+*.bak
+*.bak.*
+# python
+__pycache__/
+*.pyc
+*.pyo
+# прочее
+.DS_Store
+Thumbs.db

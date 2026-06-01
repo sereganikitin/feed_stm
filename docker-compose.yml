@@ -1,0 +1,23 @@
+services:
+  feed-enricher:
+    build: .
+    image: feed-enricher:latest
+    container_name: feed-enricher
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - feed-cache:/app/feed_enricher/cache
+    networks:
+      - st-michael
+    expose:
+      - "8765"
+    # Порт НЕ публикуется на хост: доступ только изнутри docker-сети,
+    # снаружи — строго через существующий st-michael-nginx (80/443).
+
+volumes:
+  feed-cache:
+
+networks:
+  st-michael:
+    external: true
+    name: st-michael-broker-platform_st-michael-network

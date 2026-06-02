@@ -29,6 +29,8 @@ from .config import (PROJECTS, PUBLIC_BASE_URL, ADMIN_DIR, project_dirs,
 from .yadisk import save_resized_jpeg, sync_public_folder
 from .assembler_avito import enrich_pb_avito_feed
 from .assembler_yandex import assemble_yandex_feed, coords_from_avito
+from .assembler import assemble_feed
+from .enricher import enrich_lot
 from .parser import parse_feed
 
 # Два набора фото: Авито и Яндекс — общий код, разные каталоги/настройки/фид
@@ -137,6 +139,34 @@ def _rebuild(slug: str, kind: str) -> None:
     _rebuild_yandex(slug) if kind == "yandex" else _rebuild_avito(slug)
 
 
+def _regenerate_plans(slug: str) -> int:
+    """Перерисовать все обогащённые планировки (после смены рассрочки/шаблона).
+    Из кэша: берём сохранённый CIAN-фид, чистим PNG, рисуем заново, пересобираем 3 фида.
+    Без перекачки фидов/фото — быстро и без риска 429. Возвращает число перерисованных."""
+    d = project_dirs(slug)
+    cian = d["feeds"] / "original.xml"
+    if not cian.exists():
+        from .server import refresh_project
+        refresh_project(slug)
+        return len(list(d["enriched"].glob("*.png")))
+    raw = cian.read_bytes()
+    lots = parse_feed(raw)
+    for png in d["enriched"].glob("*.png"):
+        png.unlink()
+    ok = 0
+    for lot in lots:
+        if lot.plan_url and lot.price and lot.area_total:
+            try:
+                enrich_lot(slug, lot)
+                ok += 1
+            except Exception as e:
+                print(f"[{slug}] regen error {lot.internal_id}: {e}")
+    assemble_feed(slug, raw, lots, d["feeds"] / "feed.xml")
+    _rebuild_avito(slug)
+    _rebuild_yandex(slug)
+    return ok
+
+
 def _photos(slug: str, kind: str = "avito") -> list[str]:
     """Имена фото набора в порядке из настроек (новые — в конец)."""
     k = _KINDS[kind]
@@ -232,17 +262,25 @@ def save_settings(slug: str):
         set_override(slug, "price_discount_pct", float(f.get("discount", "0").replace(",", ".") or 0))
     except ValueError:
         flash("Скидка: ожидалось число — не сохранено")
-    # рассрочка (если у проекта она есть)
+    # рассрочка (если у проекта она есть) — при изменении сразу перерисовываем планировки
+    inst_changed = False
     if isinstance(PROJECTS[slug].get("installment"), dict):
+        old = get_project(slug).get("installment")
         try:
-            set_override(slug, "installment", {
-                "feed_to_base_divisor": float(f.get("inst_div", "0.8")),
-                "down_payment_pct": float(f.get("inst_pv", "0.10")),
-                "monthly_pct_of_base": float(f.get("inst_m", "0.005")),
-            })
+            new = {
+                "feed_to_base_divisor": float(f.get("inst_div", "0.8").replace(",", ".")),
+                "down_payment_pct": float(f.get("inst_pv", "0.10").replace(",", ".")),
+                "monthly_pct_of_base": float(f.get("inst_m", "0.005").replace(",", ".")),
+            }
+            set_override(slug, "installment", new)
+            inst_changed = (new != old)
         except ValueError:
             flash("Рассрочка: ожидались числа — не сохранено")
-    flash("Настройки сохранены. Нажмите «Обновить фид», чтобы применить.")
+    if inst_changed:
+        n = _regenerate_plans(slug)
+        flash(f"Настройки сохранены. Планировки перерисованы с новой рассрочкой ({n} шт).")
+    else:
+        flash("Настройки сохранены. Нажмите «Обновить фид», чтобы применить.")
     return redirect(url_for("admin.project", slug=slug))
 
 

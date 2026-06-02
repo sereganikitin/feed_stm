@@ -275,6 +275,23 @@ def serve_extra_yandex(slug: str, name: str):
     return send_file(p, mimetype="image/jpeg")
 
 
+# Версионные URL (cache-busting): версия — отдельным сегментом пути, чтобы URL
+# заканчивался на .png/.jpg (Яндекс.Недвижимость отвергает ?v= у картинок).
+@app.route("/enriched/<slug>/<ver>/<name>")
+def serve_plan_v(slug: str, ver: str, name: str):
+    return serve_plan(slug, name)
+
+
+@app.route("/extra/<slug>/<ver>/<name>")
+def serve_extra_v(slug: str, ver: str, name: str):
+    return serve_extra(slug, name)
+
+
+@app.route("/extra_yandex/<slug>/<ver>/<name>")
+def serve_extra_yandex_v(slug: str, ver: str, name: str):
+    return serve_extra_yandex(slug, name)
+
+
 @app.route("/refresh/<slug>", methods=["POST"])
 def manual_refresh_slug(slug: str):
     if slug not in PROJECTS:

@@ -54,7 +54,7 @@ def assemble_yandex_feed(slug: str, lots: list[FeedLot], coords: dict,
     pfiles = {f.name: f for f in dirs["extra_yandex"].glob("*.jpg")}
     order = [n for n in (proj.get("extra_photo_order_yandex") or []) if n in pfiles]
     photo_names = order + sorted(set(pfiles) - set(order))
-    photo_urls  = [f"{PUBLIC_BASE_URL}/extra_yandex/{slug}/{n}?v={file_ver(pfiles[n])}" for n in photo_names]
+    photo_urls  = [f"{PUBLIC_BASE_URL}/extra_yandex/{slug}/{file_ver(pfiles[n])}/{n}" for n in photo_names]
 
     root = ET.Element(f"{{{NS}}}realty-feed")
     _e(root, "generation-date", generation_date)
@@ -139,7 +139,7 @@ def assemble_yandex_feed(slug: str, lots: list[FeedLot], coords: dict,
         # Картинки: обложка (наша планировка) + наши фото
         png = enriched_dir / f"{lot.internal_id}.png"
         if png.exists():
-            _e(o, "image", f"{PUBLIC_BASE_URL}/enriched/{slug}/{lot.internal_id}.png?v={file_ver(png)}")
+            _e(o, "image", f"{PUBLIC_BASE_URL}/enriched/{slug}/{file_ver(png)}/{lot.internal_id}.png")
         for u in photo_urls:
             _e(o, "image", u)
 

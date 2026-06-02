@@ -44,8 +44,9 @@ _HOUSE_TYPE_FIX = {
 
 
 def _enriched_url(slug: str, internal_id: str) -> str:
+    # Версия в ПУТИ (Яндекс не принимает ?v= у картинок)
     png = project_dirs(slug)["enriched"] / f"{internal_id}.png"
-    return f"{PUBLIC_BASE_URL}/enriched/{slug}/{internal_id}.png?v={file_ver(png)}"
+    return f"{PUBLIC_BASE_URL}/enriched/{slug}/{file_ver(png)}/{internal_id}.png"
 
 
 def _avito_rooms_str(code: int) -> str:
@@ -176,7 +177,7 @@ def enrich_pb_avito_feed(slug: str, avito_xml: bytes, out_path: Path) -> Path:
         order = [n for n in (proj.get("extra_photo_order") or []) if n in files]
         # файлы не из списка порядка — в конец по имени
         rest  = sorted(n for n in files if n not in order)
-        extra_urls = [f"{PUBLIC_BASE_URL}/extra/{slug}/{n}?v={file_ver(files[n])}" for n in (order + rest)]
+        extra_urls = [f"{PUBLIC_BASE_URL}/extra/{slug}/{file_ver(files[n])}/{n}" for n in (order + rest)]
 
     root = ET.fromstring(avito_xml)
 

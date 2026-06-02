@@ -21,8 +21,9 @@ _ROOMS_TO_CIAN = {0: 9, -1: 7, 6: 10}
 
 
 def _public_url_for(slug: str, internal_id: str) -> str:
+    # Версия в ПУТИ (не query) — Яндекс.Недвижимость отвергает картинки с ?v=, ждёт .png на конце
     png = project_dirs(slug)["enriched"] / f"{internal_id}.png"
-    return f"{PUBLIC_BASE_URL}/enriched/{slug}/{internal_id}.png?v={file_ver(png)}"
+    return f"{PUBLIC_BASE_URL}/enriched/{slug}/{file_ver(png)}/{internal_id}.png"
 
 
 def assemble_feed(slug: str, original_xml: bytes,

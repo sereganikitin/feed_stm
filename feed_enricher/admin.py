@@ -28,6 +28,16 @@ from .config import (PROJECTS, PUBLIC_BASE_URL, ADMIN_DIR, project_dirs,
                      get_project, set_override, load_overrides)
 from .yadisk import save_resized_jpeg, sync_public_folder
 from .assembler_avito import enrich_pb_avito_feed
+from .assembler_yandex import assemble_yandex_feed, coords_from_avito
+from .parser import parse_feed
+
+# Два набора фото: Авито и Яндекс — общий код, разные каталоги/настройки/фид
+_KINDS = {
+    "avito":  {"dir": "extra",        "order_key": "extra_photo_order",
+               "cfg_key": "avito_extra_photos",  "url": "extra",        "title": "Авито"},
+    "yandex": {"dir": "extra_yandex", "order_key": "extra_photo_order_yandex",
+               "cfg_key": "yandex_extra_photos", "url": "extra_yandex", "title": "Яндекс.Недвижимость"},
+}
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
 
@@ -108,12 +118,31 @@ def _rebuild_avito(slug: str) -> None:
         refresh_project(slug)
 
 
-def _photos(slug: str) -> list[str]:
-    """Имена фото в /extra в порядке из настроек (новые — в конец)."""
-    files = {p.name for p in project_dirs(slug)["extra"].glob("*.jpg")}
-    order = [n for n in (get_project(slug).get("extra_photo_order") or []) if n in files]
-    rest = sorted(files - set(order))
-    return order + rest
+def _rebuild_yandex(slug: str) -> None:
+    """Пересобрать Яндекс-фид после правок фото — из кэшированных исходников."""
+    d = project_dirs(slug)
+    cian = d["feeds"] / "original.xml"
+    if not cian.exists():
+        from .server import refresh_project
+        refresh_project(slug)
+        return
+    lots = parse_feed(cian.read_bytes())
+    av = d["feeds"] / "original_avito.xml"
+    coords = coords_from_avito(av.read_bytes()) if av.exists() else {}
+    now = time.strftime("%Y-%m-%dT%H:%M:%S+03:00")
+    assemble_yandex_feed(slug, lots, coords, d["feeds"] / "yandex.xml", now)
+
+
+def _rebuild(slug: str, kind: str) -> None:
+    _rebuild_yandex(slug) if kind == "yandex" else _rebuild_avito(slug)
+
+
+def _photos(slug: str, kind: str = "avito") -> list[str]:
+    """Имена фото набора в порядке из настроек (новые — в конец)."""
+    k = _KINDS[kind]
+    files = {p.name for p in project_dirs(slug)[k["dir"]].glob("*.jpg")}
+    order = [n for n in (get_project(slug).get(k["order_key"]) or []) if n in files]
+    return order + sorted(files - set(order))
 
 
 def _avito_check(slug: str) -> dict:
@@ -158,7 +187,9 @@ def dashboard():
             "slug": slug, "name": p["name"],
             "cian": _count(d["feeds"] / "feed.xml", "object"),
             "avito": _count(d["feeds"] / "avito.xml", "Ad"),
-            "photos": len(_photos(slug)),
+            "yandex": _count(d["feeds"] / "yandex.xml", "offer"),
+            "photos": len(_photos(slug, "avito")),
+            "photos_y": len(_photos(slug, "yandex")),
             "status": st.get(slug, {}),
         })
     return render_template_string(_DASH_HTML, rows=rows, base=PUBLIC_BASE_URL)
@@ -171,9 +202,15 @@ def project(slug: str):
         abort(404)
     proj = get_project(slug)
     check = _avito_check(slug)
+    galleries = [{
+        "kind": kk, "title": v["title"], "url": v["url"],
+        "photos": _photos(slug, kk),
+        "feed": f"{PUBLIC_BASE_URL}/feed/{slug}-{kk}.xml",
+        "has_yd": bool((PROJECTS[slug].get(v["cfg_key"]) or {}).get("yadisk_public_key")),
+    } for kk, v in _KINDS.items()]
     return render_template_string(
         _PROJ_HTML, slug=slug, proj=proj, base=PUBLIC_BASE_URL,
-        photos=_photos(slug), check=check,
+        galleries=galleries, plan=check.get("plan"), check=check,
         decor=_DECOR, house=_HOUSE,
         has_installment=isinstance(PROJECTS[slug].get("installment"), dict),
         status=_status().get(slug, {}),
@@ -209,13 +246,14 @@ def save_settings(slug: str):
     return redirect(url_for("admin.project", slug=slug))
 
 
-@admin_bp.route("/<slug>/photos/upload", methods=["POST"])
+@admin_bp.route("/<slug>/<kind>/photos/upload", methods=["POST"])
 @login_required
-def upload_photos(slug: str):
-    if slug not in PROJECTS:
+def upload_photos(slug: str, kind: str):
+    if slug not in PROJECTS or kind not in _KINDS:
         abort(404)
-    extra = project_dirs(slug)["extra"]
-    order = list(get_project(slug).get("extra_photo_order") or [n for n in _photos(slug)])
+    k = _KINDS[kind]
+    extra = project_dirs(slug)[k["dir"]]
+    order = list(get_project(slug).get(k["order_key"]) or _photos(slug, kind))
     added = 0
     for fs in request.files.getlist("photos"):
         if not fs or not fs.filename:
@@ -229,52 +267,55 @@ def upload_photos(slug: str):
             added += 1
         except Exception as e:
             flash(f"Не удалось обработать {fs.filename}: {e}")
-    set_override(slug, "extra_photo_order", order)
-    _rebuild_avito(slug)
-    flash(f"Загружено фото: {added}.")
+    set_override(slug, k["order_key"], order)
+    _rebuild(slug, kind)
+    flash(f"Загружено фото ({k['title']}): {added}.")
     return redirect(url_for("admin.project", slug=slug))
 
 
-@admin_bp.route("/<slug>/photos/delete", methods=["POST"])
+@admin_bp.route("/<slug>/<kind>/photos/delete", methods=["POST"])
 @login_required
-def delete_photo(slug: str):
-    if slug not in PROJECTS:
+def delete_photo(slug: str, kind: str):
+    if slug not in PROJECTS or kind not in _KINDS:
         abort(404)
+    k = _KINDS[kind]
     name = secure_filename(request.form.get("name", ""))
-    p = project_dirs(slug)["extra"] / name
+    p = project_dirs(slug)[k["dir"]] / name
     if p.exists():
         p.unlink()
-    order = [n for n in (get_project(slug).get("extra_photo_order") or []) if n != name]
-    set_override(slug, "extra_photo_order", order)
-    _rebuild_avito(slug)
+    order = [n for n in (get_project(slug).get(k["order_key"]) or []) if n != name]
+    set_override(slug, k["order_key"], order)
+    _rebuild(slug, kind)
     flash(f"Удалено: {name}.")
     return redirect(url_for("admin.project", slug=slug))
 
 
-@admin_bp.route("/<slug>/photos/order", methods=["POST"])
+@admin_bp.route("/<slug>/<kind>/photos/order", methods=["POST"])
 @login_required
-def reorder_photos(slug: str):
-    if slug not in PROJECTS:
+def reorder_photos(slug: str, kind: str):
+    if slug not in PROJECTS or kind not in _KINDS:
         abort(404)
     order = [secure_filename(n) for n in request.form.getlist("order") if n.strip()]
-    set_override(slug, "extra_photo_order", order)
-    _rebuild_avito(slug)
+    set_override(slug, _KINDS[kind]["order_key"], order)
+    _rebuild(slug, kind)
     return ("", 204)
 
 
-@admin_bp.route("/<slug>/photos/sync_yd", methods=["POST"])
+@admin_bp.route("/<slug>/<kind>/photos/sync_yd", methods=["POST"])
 @login_required
-def sync_yd(slug: str):
-    if slug not in PROJECTS:
+def sync_yd(slug: str, kind: str):
+    if slug not in PROJECTS or kind not in _KINDS:
         abort(404)
-    cfg = PROJECTS[slug].get("avito_extra_photos") or {}
+    k = _KINDS[kind]
+    cfg = PROJECTS[slug].get(k["cfg_key"]) or {}
     if not cfg.get("yadisk_public_key"):
-        flash("Для этого фида не задана папка Яндекс.Диска")
+        flash("Для этого набора не задана папка Яндекс.Диска")
         return redirect(url_for("admin.project", slug=slug))
     try:
         n = len(sync_public_folder(cfg["yadisk_public_key"], cfg["yadisk_path"],
-                                   project_dirs(slug)["extra"]))
-        flash(f"С Яндекс.Диска синхронизировано фото: {n}. Нажмите «Обновить фид».")
+                                   project_dirs(slug)[k["dir"]]))
+        _rebuild(slug, kind)
+        flash(f"С Яндекс.Диска синхронизировано ({k['title']}): {n}.")
     except Exception as e:
         flash(f"Ошибка синка с Я.Диска: {e}")
     return redirect(url_for("admin.project", slug=slug))
@@ -347,13 +388,14 @@ _DASH_HTML = _CSS + """<title>Фиды</title>
 <h1>Фиды квартир — панель</h1>""" + _FLASH + """
 <div class=card>
  <table>
-  <tr><th>Проект</th><th>ЦИАН</th><th>Авито</th><th>Фото Авито</th><th>Последнее обновление</th><th></th></tr>
+  <tr><th>Проект</th><th>ЦИАН</th><th>Авито</th><th>Яндекс</th><th>Фото А/Я</th><th>Обновлено</th><th></th></tr>
   {% for r in rows %}
   <tr>
    <td><b>{{r.name}}</b><div class=muted>{{r.slug}}</div></td>
    <td>{{r.cian}} <div class=muted><a href="{{base}}/feed/{{r.slug}}.xml" target=_blank>xml</a></div></td>
    <td>{{r.avito}} <div class=muted><a href="{{base}}/feed/{{r.slug}}-avito.xml" target=_blank>xml</a></div></td>
-   <td>{{r.photos}}</td>
+   <td>{{r.yandex}} <div class=muted><a href="{{base}}/feed/{{r.slug}}-yandex.xml" target=_blank>xml</a></div></td>
+   <td>{{r.photos}} / {{r.photos_y}}</td>
    <td class=muted>{% if r.status.get('ts') %}{{r.status.ts}}<br>планировок: {{r.status.get('enriched_ok','?')}}{% else %}—{% endif %}</td>
    <td><a class=btn href="{{url_for('admin.project',slug=r.slug)}}">Открыть</a></td>
   </tr>
@@ -414,62 +456,67 @@ _PROJ_HTML = _CSS + """<title>{{proj.name}}</title>
  </div>
 </div>
 
+{% if check.first %}<p class=muted>Превью первого лота {{check.first.id}}: {{check.first.rooms}} · {{check.first.square}} м² · {{check.first.price}} ₽. Первой в карточке всегда идёт наша планировка{% if plan %} (пунктирная плитка){% endif %}.</p>{% endif %}
+{% for g in galleries %}
 <div class=card>
- <h2 style="margin-top:0">Фото карточки Авито</h2>
- <p class=muted>Так будет выглядеть карточка. Перетаскивайте наши фото мышкой — меняется порядок;
-   наведите и нажмите <b>✕</b> — удалить; плитка <b>＋</b> — загрузить новые. Изменения применяются сразу.
-   Первой всегда идёт наша планировка{% if check.plan %} (пунктирная плитка, её не трогаем){% endif %}.</p>
- {% if check.first %}<p class=muted>Пример (лот {{check.first.id}}): {{check.first.rooms}} · {{check.first.square}} м² · {{check.first.price}} ₽</p>{% endif %}
- <div class=strip id=strip>
-   {% if check.plan %}<div class="tile locked"><img src="{{check.plan}}"><span class=lbl>планировка</span></div>{% endif %}
-   {% for n in photos %}
+ <h2 style="margin-top:0">Фото — {{g.title}} ({{g.photos|length}})</h2>
+ <p class=muted>Перетаскивайте мышкой — порядок · <b>✕</b> — удалить · плитка <b>＋</b> — загрузить. Применяется сразу.
+   · <a href="{{g.feed}}" target=_blank>открыть XML</a></p>
+ <div class=strip data-kind="{{g.kind}}"
+      data-upload="{{url_for('admin.upload_photos',slug=slug,kind=g.kind)}}"
+      data-delete="{{url_for('admin.delete_photo',slug=slug,kind=g.kind)}}"
+      data-order="{{url_for('admin.reorder_photos',slug=slug,kind=g.kind)}}">
+   {% if plan %}<div class="tile locked"><img src="{{plan}}"><span class=lbl>планировка</span></div>{% endif %}
+   {% for n in g.photos %}
    <div class=tile draggable=true data-name="{{n}}">
-     <img src="{{base}}/extra/{{slug}}/{{n}}" loading=lazy>
+     <img src="{{base}}/{{g.url}}/{{slug}}/{{n}}" loading=lazy>
      <button class=del title="Удалить">✕</button>
      <span class=num>{{loop.index}}</span>
    </div>
    {% endfor %}
-   <label class="tile add" title="Загрузить фото">＋<input type=file id=up accept="image/*" multiple hidden></label>
+   <label class="tile add" title="Загрузить фото">＋<input type=file accept="image/*" multiple hidden></label>
  </div>
- <div id=busy class=muted style="display:none;margin-top:10px">Сохраняю, обновляю фид…</div>
- <form method=post action="{{url_for('admin.sync_yd',slug=slug)}}" style="margin-top:12px">
+ {% if g.has_yd %}<form method=post action="{{url_for('admin.sync_yd',slug=slug,kind=g.kind)}}" style="margin-top:12px">
   <button class="btn gray">Синхронизировать с Яндекс.Диска</button>
- </form>
+ </form>{% endif %}
 </div>
+{% endfor %}
+<div id=busy class=muted style="display:none;margin:10px 0">Сохраняю, обновляю фид…</div>
 <p class=muted><a href="{{url_for('admin.logout')}}">Выйти</a></p>
 <script>
 (function(){
- var strip=document.getElementById('strip'); if(!strip) return;
  var busy=document.getElementById('busy');
  function post(url,body){ busy.style.display='block';
    fetch(url,{method:'POST',body:body,credentials:'same-origin'}).then(function(){location.reload();})
    .catch(function(){busy.textContent='Ошибка, попробуйте ещё раз';}); }
- strip.addEventListener('click',function(e){
-   var b=e.target.closest('.del'); if(!b) return;
-   var tile=b.closest('.tile'); if(!confirm('Удалить это фото?')) return;
-   var fd=new FormData(); fd.append('name',tile.dataset.name);
-   post('{{url_for("admin.delete_photo",slug=slug)}}',fd); });
- var up=document.getElementById('up');
- if(up) up.addEventListener('change',function(){
-   if(!up.files.length) return; var fd=new FormData();
-   for(var i=0;i<up.files.length;i++) fd.append('photos',up.files[i]);
-   post('{{url_for("admin.upload_photos",slug=slug)}}',fd); });
- var drag=null;
- strip.addEventListener('dragstart',function(e){
-   var t=e.target.closest('.tile[draggable=true]'); if(!t) return;
-   drag=t; t.classList.add('dragging'); });
- strip.addEventListener('dragend',function(){ if(drag) drag.classList.remove('dragging'); drag=null;
-   strip.querySelectorAll('.dragover').forEach(function(x){x.classList.remove('dragover');}); });
- strip.addEventListener('dragover',function(e){ e.preventDefault();
-   var t=e.target.closest('.tile[draggable=true]');
-   strip.querySelectorAll('.dragover').forEach(function(x){x.classList.remove('dragover');});
-   if(t&&t!==drag) t.classList.add('dragover'); });
- strip.addEventListener('drop',function(e){ e.preventDefault();
-   var t=e.target.closest('.tile[draggable=true]'); if(!drag||!t||t===drag) return;
-   var ts=[].slice.call(strip.querySelectorAll('.tile[draggable=true]'));
-   if(ts.indexOf(drag)<ts.indexOf(t)) t.after(drag); else t.before(drag);
-   var order=[].slice.call(strip.querySelectorAll('.tile[draggable=true]')).map(function(x){return x.dataset.name;});
-   var fd=new FormData(); order.forEach(function(n){fd.append('order',n);});
-   post('{{url_for("admin.reorder_photos",slug=slug)}}',fd); });
+ document.querySelectorAll('.strip').forEach(function(strip){
+   var drag=null;
+   strip.addEventListener('click',function(e){
+     var b=e.target.closest('.del'); if(!b) return;
+     var tile=b.closest('.tile'); if(!confirm('Удалить это фото?')) return;
+     var fd=new FormData(); fd.append('name',tile.dataset.name);
+     post(strip.dataset.delete,fd); });
+   var up=strip.querySelector('input[type=file]');
+   if(up) up.addEventListener('change',function(){
+     if(!up.files.length) return; var fd=new FormData();
+     for(var i=0;i<up.files.length;i++) fd.append('photos',up.files[i]);
+     post(strip.dataset.upload,fd); });
+   strip.addEventListener('dragstart',function(e){
+     var t=e.target.closest('.tile[draggable=true]'); if(!t) return;
+     drag=t; t.classList.add('dragging'); });
+   strip.addEventListener('dragend',function(){ if(drag) drag.classList.remove('dragging'); drag=null;
+     strip.querySelectorAll('.dragover').forEach(function(x){x.classList.remove('dragover');}); });
+   strip.addEventListener('dragover',function(e){ e.preventDefault();
+     var t=e.target.closest('.tile[draggable=true]');
+     strip.querySelectorAll('.dragover').forEach(function(x){x.classList.remove('dragover');});
+     if(t&&t!==drag) t.classList.add('dragover'); });
+   strip.addEventListener('drop',function(e){ e.preventDefault();
+     var t=e.target.closest('.tile[draggable=true]'); if(!drag||!t||t===drag) return;
+     var ts=[].slice.call(strip.querySelectorAll('.tile[draggable=true]'));
+     if(ts.indexOf(drag)<ts.indexOf(t)) t.after(drag); else t.before(drag);
+     var order=[].slice.call(strip.querySelectorAll('.tile[draggable=true]')).map(function(x){return x.dataset.name;});
+     var fd=new FormData(); order.forEach(function(n){fd.append('order',n);});
+     post(strip.dataset.order,fd); });
+ });
 })();
 </script>"""

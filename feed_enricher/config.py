@@ -194,7 +194,8 @@ EDITABLE_KEYS = {
     "avito_house_type",             # str
     "avito_market_type",            # str
     "avito_replace_building_image", # bool — заменять ли building_image нашими фото
-    "extra_photo_order",            # list[str] — порядок файлов в /extra
+    "extra_photo_order",            # list[str] — порядок файлов в /extra (Авито)
+    "extra_photo_order_yandex",     # list[str] — порядок файлов в /extra_yandex
     "description_suffix",           # str — приписка к каждому описанию
     "installment",                  # dict — формула рассрочки (где есть)
     "price_discount_pct",           # float — скидка к цене из фида, % (0 = не трогать)

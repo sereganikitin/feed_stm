@@ -51,8 +51,10 @@ def assemble_yandex_feed(slug: str, lots: list[FeedLot], coords: dict,
     house_ids   = proj.get("yandex_house_ids", {}) or {}
     agent       = proj.get("sales_agent", {}) or {}
 
-    photo_files = sorted(dirs["extra_yandex"].glob("*.jpg"))
-    photo_urls  = [f"{PUBLIC_BASE_URL}/extra_yandex/{slug}/{f.name}" for f in photo_files]
+    files = {f.name for f in dirs["extra_yandex"].glob("*.jpg")}
+    order = [n for n in (proj.get("extra_photo_order_yandex") or []) if n in files]
+    photo_names = order + sorted(files - set(order))
+    photo_urls  = [f"{PUBLIC_BASE_URL}/extra_yandex/{slug}/{n}" for n in photo_names]
 
     root = ET.Element(f"{{{NS}}}realty-feed")
     _e(root, "generation-date", generation_date)

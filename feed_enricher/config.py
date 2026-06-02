@@ -223,6 +223,15 @@ def set_override(slug: str, key: str, value) -> None:
     save_overrides(data)
 
 
+def file_ver(path) -> str:
+    """Версия файла для cache-busting ссылок (?v=...). Меняется при перезаписи файла —
+    тогда классифайд (Авито/Яндекс) видит новый URL и перезабирает картинку."""
+    try:
+        return str(int(Path(path).stat().st_mtime))
+    except Exception:
+        return "0"
+
+
 def get_project(slug: str) -> dict:
     """Эффективный конфиг проекта = PROJECTS[slug] + разрешённые оверрайды из админки."""
     base = dict(PROJECTS[slug])

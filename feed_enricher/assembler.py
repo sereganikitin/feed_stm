@@ -12,7 +12,7 @@
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from .config import PUBLIC_BASE_URL
+from .config import PUBLIC_BASE_URL, project_dirs, file_ver
 from .parser import FeedLot
 
 
@@ -21,7 +21,8 @@ _ROOMS_TO_CIAN = {0: 9, -1: 7, 6: 10}
 
 
 def _public_url_for(slug: str, internal_id: str) -> str:
-    return f"{PUBLIC_BASE_URL}/enriched/{slug}/{internal_id}.png"
+    png = project_dirs(slug)["enriched"] / f"{internal_id}.png"
+    return f"{PUBLIC_BASE_URL}/enriched/{slug}/{internal_id}.png?v={file_ver(png)}"
 
 
 def assemble_feed(slug: str, original_xml: bytes,

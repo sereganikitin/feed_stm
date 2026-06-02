@@ -16,6 +16,10 @@ from .config import PUBLIC_BASE_URL
 from .parser import FeedLot
 
 
+# Обратный маппинг lot.rooms → код FlatRoomsCount ЦИАН (см. parser.ROOMS_MAP)
+_ROOMS_TO_CIAN = {0: 9, -1: 7, 6: 10}
+
+
 def _public_url_for(slug: str, internal_id: str) -> str:
     return f"{PUBLIC_BASE_URL}/enriched/{slug}/{internal_id}.png"
 
@@ -30,6 +34,13 @@ def assemble_feed(slug: str, original_xml: bytes,
         if iid not in by_id:
             continue
         new_url = _public_url_for(slug, iid)
+        lot = by_id[iid]
+
+        # 0) Комнатность — приводим к числу по описанию (как на картинке и в Авито/Яндекс),
+        # чтобы во всех фидах было одинаково. lot.rooms уже учитывает описание.
+        fr = obj.find("FlatRoomsCount")
+        if fr is not None:
+            fr.text = str(_ROOMS_TO_CIAN.get(lot.rooms, lot.rooms))
 
         # 1) LayoutPhoto/FullUrl — основной план
         lp = obj.find("LayoutPhoto")

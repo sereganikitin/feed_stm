@@ -24,7 +24,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from .config import PUBLIC_BASE_URL, PROJECTS, project_dirs, get_project
-from .parser import FeedLot
+from .parser import FeedLot, rooms_from_description
 
 
 # Какие фото из ProfitBase НЕ берём как доп.снимки (это планы — их заменяет наша картинка)
@@ -47,38 +47,19 @@ def _enriched_url(slug: str, internal_id: str) -> str:
     return f"{PUBLIC_BASE_URL}/enriched/{slug}/{internal_id}.png"
 
 
-# Число комнат из заголовка описания (Авито считает по спальням, ProfitBase в поле —
-# с учётом кухни-гостиной у евро, и отклоняет за расхождение «Количество комнат»).
-_DESC_ROOMS = [
-    (r"однокомн|1[-\s]?комн",            "1"),
-    (r"двухкомн|2[-\s]?комн",            "2"),
-    (r"тр[ёе]хкомн|3[-\s]?комн",         "3"),
-    (r"четыр[ёе]хкомн|4[-\s]?комн",      "4"),
-    (r"пятикомн|5[-\s]?комн",            "5"),
-    (r"свободн\w*\s*планировк|своб\.?\s*планировк", "Своб. планировка"),
-    (r"студи",                            "Студия"),
-]
-
-
-def rooms_from_description(desc: str):
-    """Комнатность из начала описания (или None). Берём первые ~120 символов —
-    там «Продаётся N-комнатная квартира…», чтобы не поймать «кухня-студия» дальше."""
-    head = re.sub(r"<[^>]+>", " ", desc or "")[:120].lower()
-    for pat, val in _DESC_ROOMS:
-        if re.search(pat, head):
-            return val
-    return None
+def _avito_rooms_str(code: int) -> str:
+    """Код комнатности (как lot.rooms) → значение Авито."""
+    if code == 0:
+        return "Студия"
+    if code < 0:
+        return "Своб. планировка"
+    if code >= 10:
+        return "10 и более"
+    return str(code)
 
 
 def _rooms_avito(lot: FeedLot) -> str:
-    """Комнатность в значениях Авито."""
-    if lot.rooms == 0:
-        return "Студия"
-    if lot.rooms < 0:
-        return "Своб. планировка"
-    if lot.rooms >= 10:
-        return "10 и более"
-    return str(lot.rooms)
+    return _avito_rooms_str(lot.rooms)
 
 
 def _cover_and_photos(slug: str, lot: FeedLot, enriched_dir: Path) -> list[str]:
@@ -231,11 +212,11 @@ def enrich_pb_avito_feed(slug: str, avito_xml: bytes, out_path: Path) -> Path:
         # «Количество комнат»: Авито отклоняет, когда поле (евро-счёт ProfitBase)
         # расходится с описанием. Берём число из описания (по спальням) и проставляем.
         rv = rooms_from_description(ad.findtext("Description"))
-        if rv:
+        if rv is not None:
             rm = ad.find("Rooms")
             if rm is None:
                 rm = ET.SubElement(ad, "Rooms")
-            rm.text = rv
+            rm.text = _avito_rooms_str(rv)
 
         # Приписка к описанию (из админки) — добавляем в конец, если её ещё нет.
         if description_suffix:

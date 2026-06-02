@@ -35,6 +35,7 @@
     <currency>rur</currency>
   </BargainTerms>
 """
+import re
 import requests
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -51,6 +52,29 @@ ROOMS_MAP = {
 }
 
 _QUARTER_MAP = {"first": 1, "second": 2, "third": 3, "fourth": 4}
+
+# Комнатность из заголовка описания (по спальням). ProfitBase в поле FlatRoomsCount
+# у европланировок считает кухню-гостиную за комнату (евро=N), а описание/классифайды —
+# по спальням (N-1). Берём число из описания и используем везде: картинка, ЦИАН, Авито, Яндекс.
+# Коды как в lot.rooms: 0=студия, -1=своб. планировка, 1..5 = число комнат.
+_DESC_ROOMS = [
+    (r"однокомн|1[-\s]?комн",            1),
+    (r"двухкомн|2[-\s]?комн",            2),
+    (r"тр[ёе]хкомн|3[-\s]?комн",         3),
+    (r"четыр[ёе]хкомн|4[-\s]?комн",      4),
+    (r"пятиком|5[-\s]?комн",             5),
+    (r"свободн\w*\s*планировк|своб\.?\s*планировк", -1),
+    (r"студи",                            0),
+]
+
+
+def rooms_from_description(desc: str):
+    """Число комнат из начала описания (код как в lot.rooms) или None."""
+    head = re.sub(r"<[^>]+>", " ", desc or "")[:120].lower()
+    for pat, code in _DESC_ROOMS:
+        if re.search(pat, head):
+            return code
+    return None
 
 # Маппинг отделки ЦИАН
 DECORATION_MAP = {
@@ -120,6 +144,11 @@ def parse_feed(xml_bytes: bytes) -> list[FeedLot]:
             lot.video_url = (vid.findtext("Url") or "").strip()
         rooms_code = _to_int(obj.findtext("FlatRoomsCount"))
         lot.rooms = ROOMS_MAP.get(rooms_code, rooms_code)
+        # Если в описании явно указана комнатность (по спальням) — она в приоритете,
+        # чтобы поле/картинка/все фиды совпадали с текстом (важно для европланировок).
+        _dr = rooms_from_description(lot.description)
+        if _dr is not None:
+            lot.rooms = _dr
         lot.is_apartments = (obj.findtext("IsApartments") or "").strip().lower() == "true"
         # Отделка
         dec_code = (obj.findtext("Decoration") or "").strip()

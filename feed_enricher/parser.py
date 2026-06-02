@@ -50,6 +50,8 @@ ROOMS_MAP = {
     10: 6,   # 5+ комнат
 }
 
+_QUARTER_MAP = {"first": 1, "second": 2, "third": 3, "fourth": 4}
+
 # Маппинг отделки ЦИАН
 DECORATION_MAP = {
     "without":          "без отделки",
@@ -81,6 +83,10 @@ class FeedLot:
     description: str = ""          # <Description>
     developer: str = ""            # <JKSchema><Developer>
     video_url: str = ""            # <Videos><VideoSchema><Url>
+    # ─── срок сдачи (для Яндекс.Недвижимости) ───
+    built_year: int = 0
+    ready_quarter: int = 0         # 1..4
+    building_complete: bool = False
     raw_xml: Optional[ET.Element] = None
 
 
@@ -134,6 +140,11 @@ def parse_feed(xml_bytes: bytes) -> list[FeedLot]:
         bld = obj.find("Building")
         if bld is not None:
             lot.floors_total = _to_int(bld.findtext("FloorsCount"))
+            dl = bld.find("Deadline")
+            if dl is not None:
+                lot.built_year = _to_int(dl.findtext("Year"))
+                lot.ready_quarter = _QUARTER_MAP.get((dl.findtext("Quarter") or "").strip().lower(), 0)
+                lot.building_complete = (dl.findtext("IsComplete") or "").strip().lower() == "true"
         # LayoutPhoto — основной план (приоритет)
         lp = obj.find("LayoutPhoto")
         if lp is not None:

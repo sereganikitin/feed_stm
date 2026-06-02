@@ -10,6 +10,8 @@
 """
 import io
 import json
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -17,6 +19,21 @@ from pathlib import Path
 from PIL import Image
 
 _API = "https://cloud-api.yandex.net/v1/disk/public/resources"
+
+
+def _open(url_or_req, timeout: int = 60, tries: int = 7):
+    """urlopen с ретраями на 429/503 (Яндекс.Диск лимитирует частоту запросов)."""
+    last = None
+    for i in range(tries):
+        try:
+            return urllib.request.urlopen(url_or_req, timeout=timeout)
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 503):
+                last = e
+                time.sleep(min(2 ** i, 30))   # 1,2,4,8,16,30,30 c
+                continue
+            raise
+    raise last
 
 
 def save_resized_jpeg(raw: bytes, out: Path, max_side: int = 2560, quality: int = 86) -> Path:
@@ -35,7 +52,7 @@ def save_resized_jpeg(raw: bytes, out: Path, max_side: int = 2560, quality: int 
 
 def _api_get(endpoint: str, params: dict) -> dict:
     url = f"{_API}{endpoint}?{urllib.parse.urlencode(params)}"
-    with urllib.request.urlopen(url, timeout=60) as r:
+    with _open(url, timeout=60) as r:
         return json.load(r)
 
 
@@ -65,8 +82,9 @@ def sync_public_folder(public_key: str, path: str, dest_dir: Path,
             continue
         href = _api_get("/download", {"public_key": public_key, "path": it["path"]})["href"]
         req = urllib.request.Request(href, headers={"User-Agent": "feed-enricher"})
-        with urllib.request.urlopen(req, timeout=180) as r:
+        with _open(req, timeout=180) as r:
             raw = r.read()
         save_resized_jpeg(raw, out, max_side=max_side, quality=quality)
         saved.append(out)
+        time.sleep(0.4)   # не долбим API Яндекс.Диска — иначе 429
     return sorted(saved)

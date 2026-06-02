@@ -21,6 +21,7 @@ from .parser import download_feed, parse_feed
 from .enricher import enrich_lot, installment_values
 from .assembler import assemble_feed
 from .assembler_avito import assemble_avito_feed, enrich_pb_avito_feed
+from .assembler_yandex import assemble_yandex_feed, coords_from_avito
 from .yadisk import sync_public_folder
 
 app = Flask(__name__)
@@ -56,6 +57,7 @@ def refresh_project(slug: str) -> dict:
         # Авито-фид. Вариант A: native-выгрузка ProfitBase + подмена обложки.
         #            Вариант B (fallback): конвертация из ЦИАН-фида.
         out_avito = dirs["feeds"] / "avito.xml"
+        avito_src = None
         if proj.get("pb_avito_feed_url"):
             # Наши фото для карточки Авито с Яндекс.Диска (если набор задан)
             extra_cfg = proj.get("avito_extra_photos")
@@ -70,6 +72,20 @@ def refresh_project(slug: str) -> dict:
             enrich_pb_avito_feed(slug, avito_src, out_avito)
         else:
             assemble_avito_feed(slug, lots, out_avito)
+
+        # Яндекс.Недвижимость: собираем из тех же лотов + фото ЯД + координаты из Авито
+        if proj.get("yandex_building_id"):
+            yx_cfg = proj.get("yandex_extra_photos")
+            if yx_cfg:
+                try:
+                    n = len(sync_public_folder(
+                        yx_cfg["yadisk_public_key"], yx_cfg["yadisk_path"], dirs["extra_yandex"]))
+                    print(f"[{slug}] yandex photos synced: {n}")
+                except Exception as e:
+                    print(f"[{slug}] yandex yadisk sync failed: {e}")
+            coords = coords_from_avito(avito_src) if avito_src else {}
+            now = time.strftime("%Y-%m-%dT%H:%M:%S+03:00")
+            assemble_yandex_feed(slug, lots, coords, dirs["feeds"] / "yandex.xml", now)
         # Опционально пушим копию в ProfitBase
         uploaded = False
         if PB_UPLOAD_URL and PB_API_TOKEN:
@@ -123,7 +139,8 @@ def index():
             f'<li><b>{p["name"]}</b> ({slug}) — '
             f'<a href="/gallery/{slug}">галерея</a> · '
             f'<a href="/feed/{slug}.xml">ЦИАН XML</a> · '
-            f'<a href="/feed/{slug}-avito.xml">Авито XML</a></li>'
+            f'<a href="/feed/{slug}-avito.xml">Авито XML</a> · '
+            f'<a href="/feed/{slug}-yandex.xml">Яндекс XML</a></li>'
         )
     return f"""<!doctype html><html><head><meta charset='utf-8'><title>feed_enricher</title>
 <style>body{{font-family:system-ui;max-width:680px;margin:40px auto;padding:0 20px;color:#222}}</style>
@@ -213,6 +230,19 @@ def serve_feed_avito(slug: str):
     return send_file(p, mimetype="application/xml")
 
 
+@app.route("/feed/<slug>-yandex.xml")
+def serve_feed_yandex(slug: str):
+    if slug not in PROJECTS:
+        abort(404)
+    dirs = project_dirs(slug)
+    p = dirs["feeds"] / "yandex.xml"
+    if not p.exists():
+        refresh_project(slug)
+    if not p.exists():
+        abort(503)
+    return send_file(p, mimetype="application/xml")
+
+
 @app.route("/enriched/<slug>/<name>")
 def serve_plan(slug: str, name: str):
     if slug not in PROJECTS:
@@ -229,6 +259,17 @@ def serve_extra(slug: str, name: str):
     if slug not in PROJECTS or "/" in name or "\\" in name:
         abort(404)
     p = project_dirs(slug)["extra"] / name
+    if not p.exists():
+        abort(404)
+    return send_file(p, mimetype="image/jpeg")
+
+
+@app.route("/extra_yandex/<slug>/<name>")
+def serve_extra_yandex(slug: str, name: str):
+    """Наши фото для карточки Яндекс.Недвижимости."""
+    if slug not in PROJECTS or "/" in name or "\\" in name:
+        abort(404)
+    p = project_dirs(slug)["extra_yandex"] / name
     if not p.exists():
         abort(404)
     return send_file(p, mimetype="image/jpeg")

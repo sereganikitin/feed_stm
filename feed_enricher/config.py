@@ -45,6 +45,15 @@ PROJECTS = {
         "avito_market_type":        "Новостройка",  # Новостройка | Вторичка
         "avito_house_type":         os.environ.get("AVITO_HOUSE_TYPE_ZORGE9", ""),   # материал: Монолитный/Кирпичный/... (опц.)
         "avito_new_development_id":  os.environ.get("AVITO_ND_ID_ZORGE9", ""),        # id ЖК в Авито (опц., если есть)
+        # ─── Яндекс.Недвижимость ───
+        "yandex_building_id": "238280",
+        "yandex_house_ids":   {1: "2120663", 2: "348510", 3: "348507"},  # № корпуса → yandex-house-id
+        "yandex_extra_photos": {
+            "yadisk_public_key": "https://disk.360.yandex.ru/d/Fb7SU0zG0kbJUQ",
+            "yadisk_path":       "/",
+            "replace_markers":   ["/uploads/house/", "/uploads/facade/", "/uploads/building_image/"],
+        },
+        "sales_agent": {"organization": "St MICHAEL", "category": "застройщик", "url": "https://stmichael.ru"},
         # ─── Раскладка шаблона Зорге 9 (1200×900) ───
         # Шаблон уже содержит брендинг/фото справа + статичные метки слева.
         # Заполняем только пустые «значения»:
@@ -111,6 +120,15 @@ PROJECTS = {
         "avito_market_type":        "Новостройка",
         "avito_house_type":         os.environ.get("AVITO_HOUSE_TYPE_B37", ""),
         "avito_new_development_id":  os.environ.get("AVITO_ND_ID_B37", ""),
+        # ─── Яндекс.Недвижимость ───  (Корпус 1=Золотая, 2=Серебряная, 3=Платиновая)
+        "yandex_building_id": "3894226",
+        "yandex_house_ids":   {1: "3947831", 2: "3894528", 3: "3947848"},
+        "yandex_extra_photos": {
+            "yadisk_public_key": "https://disk.360.yandex.ru/d/VUz9nj7AoKdu9g",
+            "yadisk_path":       "/",
+            "replace_markers":   ["/uploads/house/", "/uploads/facade/", "/uploads/building_image/"],
+        },
+        "sales_agent": {"organization": "St MICHAEL", "category": "застройщик", "url": "https://stmichael.ru"},
         # ─── Раскладка шаблона Б37 (1150×1040) ───
         # Слева — брендинг + фото дома, справа — большая белая зона:
         #   • сверху 3 метки «КОМНАТЫ / ПЛОЩАДЬ / ЭТАЖ»
@@ -153,7 +171,8 @@ def project_dirs(slug: str) -> dict:
         "plans":     base / "plans",
         "enriched":  base / "enriched",
         "feeds":     base / "feeds",
-        "extra":     base / "extra",      # фото из Яндекс.Диска для карточки Авито
+        "extra":         base / "extra",          # фото для карточки Авито
+        "extra_yandex":  base / "extra_yandex",   # фото для карточки Яндекс.Недвижимости
     }
     for d in dirs.values():
         d.mkdir(parents=True, exist_ok=True)

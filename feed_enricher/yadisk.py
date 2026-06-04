@@ -79,11 +79,14 @@ def sync_view_folders(public_key: str, dest_base: Path, resolve,
             iid = resolve(it["name"], ancestors)
             if iid:
                 dest = dest_base / iid
+                # сортируем исходники по имени и сохраняем как 01.jpg, 02.jpg… —
+                # чистые URL без пробелов/кириллицы (исходные имена бывают «ChatGPT Image …»)
+                srcs = sorted((f for f in _list_items(public_key, it["path"])
+                               if f.get("type") == "file" and (f.get("mime_type") or "").startswith("image/")),
+                              key=lambda f: f["name"])
                 names = []
-                for f in _list_items(public_key, it["path"]):
-                    if f.get("type") != "file" or not (f.get("mime_type") or "").startswith("image/"):
-                        continue
-                    out = dest / (Path(f["name"]).stem + ".jpg")
+                for i, f in enumerate(srcs, 1):
+                    out = dest / f"{i:02d}.jpg"
                     if not out.exists():
                         href = _api_get("/download", {"public_key": public_key, "path": f["path"]})["href"]
                         req = urllib.request.Request(href, headers={"User-Agent": "feed-enricher"})
@@ -93,7 +96,7 @@ def sync_view_folders(public_key: str, dest_base: Path, resolve,
                         time.sleep(0.4)
                     names.append(out.name)
                 if names:
-                    result[iid] = sorted(names)
+                    result[iid] = names
             else:
                 walk(it["path"], ancestors + [it["name"]])
 

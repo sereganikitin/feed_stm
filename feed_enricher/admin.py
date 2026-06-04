@@ -175,6 +175,30 @@ def _photos(slug: str, kind: str = "avito") -> list[str]:
     return order + sorted(files - set(order))
 
 
+def _views_count(slug: str) -> int:
+    """Сколько лотов имеют виды (подпапок в cache/<slug>/views)."""
+    vdir = project_dirs(slug)["views"]
+    return sum(1 for p in vdir.glob("*") if p.is_dir() and any(p.glob("*.jpg"))) if vdir.exists() else 0
+
+
+def _views_coverage(slug: str) -> list:
+    """По каждому лоту: id, метка, число видов (0 = нет). Сортировка: сначала без видов."""
+    d = project_dirs(slug)
+    cian = d["feeds"] / "original.xml"
+    if not cian.exists():
+        return []
+    vdir = d["views"]
+    rows = []
+    for l in parse_feed(cian.read_bytes()):
+        vd = vdir / l.internal_id
+        n = len(list(vd.glob("*.jpg"))) if vd.exists() else 0
+        lbl = "Ст." if l.rooms == 0 else ("СП" if l.rooms < 0 else f"{l.rooms}К")
+        rows.append({"id": l.internal_id, "house": l.house_name, "floor": l.floor,
+                     "label": lbl, "area": f"{l.area_total:.1f}", "n": n})
+    rows.sort(key=lambda r: (r["n"] > 0, r["house"], r["id"]))   # без видов — наверх
+    return rows
+
+
 def _avito_check(slug: str) -> dict:
     """Сводка по собранному Авито-фиду: число объявлений и пропуски обяз. полей."""
     p = project_dirs(slug)["feeds"] / "avito.xml"
@@ -220,6 +244,7 @@ def dashboard():
             "yandex": _count(d["feeds"] / "yandex.xml", "offer"),
             "photos": len(_photos(slug, "avito")),
             "photos_y": len(_photos(slug, "yandex")),
+            "views": _views_count(slug),
             "status": st.get(slug, {}),
         })
     return render_template_string(_DASH_HTML, rows=rows, base=PUBLIC_BASE_URL)
@@ -245,6 +270,17 @@ def project(slug: str):
         has_installment=isinstance(PROJECTS[slug].get("installment"), dict),
         status=_status().get(slug, {}),
     )
+
+
+@admin_bp.route("/<slug>/views")
+@login_required
+def views_page(slug: str):
+    if slug not in PROJECTS:
+        abort(404)
+    rows = _views_coverage(slug)
+    have = sum(1 for r in rows if r["n"] > 0)
+    return render_template_string(_VIEWS_HTML, slug=slug, name=PROJECTS[slug]["name"],
+                                  rows=rows, have=have, total=len(rows), base=PUBLIC_BASE_URL)
 
 
 @admin_bp.route("/<slug>/settings", methods=["POST"])
@@ -426,7 +462,7 @@ _DASH_HTML = _CSS + """<title>Фиды</title>
 <h1>Фиды квартир — панель</h1>""" + _FLASH + """
 <div class=card>
  <table>
-  <tr><th>Проект</th><th>ЦИАН</th><th>Авито</th><th>Яндекс</th><th>Фото А/Я</th><th>Обновлено</th><th></th></tr>
+  <tr><th>Проект</th><th>ЦИАН</th><th>Авито</th><th>Яндекс</th><th>Фото А/Я</th><th>Виды</th><th>Обновлено</th><th></th></tr>
   {% for r in rows %}
   <tr>
    <td><b>{{r.name}}</b><div class=muted>{{r.slug}}</div></td>
@@ -434,6 +470,7 @@ _DASH_HTML = _CSS + """<title>Фиды</title>
    <td>{{r.avito}} <div class=muted><a href="{{base}}/feed/{{r.slug}}-avito.xml" target=_blank>xml</a></div></td>
    <td>{{r.yandex}} <div class=muted><a href="{{base}}/feed/{{r.slug}}-yandex.xml" target=_blank>xml</a></div></td>
    <td>{{r.photos}} / {{r.photos_y}}</td>
+   <td>{{r.views}} <div class=muted><a href="{{url_for('admin.views_page',slug=r.slug)}}">список</a></div></td>
    <td class=muted>{% if r.status.get('ts') %}{{r.status.ts}}<br>планировок: {{r.status.get('enriched_ok','?')}}{% else %}—{% endif %}</td>
    <td><a class=btn href="{{url_for('admin.project',slug=r.slug)}}">Открыть</a></td>
   </tr>
@@ -442,8 +479,27 @@ _DASH_HTML = _CSS + """<title>Фиды</title>
 </div>
 <p class=muted><a href="{{url_for('admin.logout')}}">Выйти</a></p>"""
 
+_VIEWS_HTML = _CSS + """<title>Виды — {{name}}</title>
+<p><a href="{{url_for('admin.dashboard')}}">← все фиды</a> · <a href="{{url_for('admin.project',slug=slug)}}">{{name}}</a></p>
+<h1>Виды из окон — {{name}}</h1>
+<div class=card>
+ <p>Лотов с видами: <b class=ok>{{have}}</b> из {{total}}. Без видов — <b class=bad>{{total-have}}</b> (вверху списка).</p>
+ <p class=muted>Чтобы добавить виды лоту — положите его виды на Я.Диск (папка «Виды на классифайды» с «_id: ID» в названии, либо папка «03» по этажам). Подхватятся при обновлении.</p>
+ <table>
+  <tr><th></th><th>Лот (ID)</th><th>Корпус</th><th>Этаж</th><th>Тип</th><th>Площадь</th><th>Видов</th></tr>
+  {% for r in rows %}
+  <tr style="{% if r.n==0 %}background:#fff5f5{% endif %}">
+   <td>{% if r.n %}<img src="{{base}}/views/{{slug}}/{{r.id}}/01.jpg" style="width:64px;height:46px;object-fit:cover;border-radius:4px"><br>{% endif %}</td>
+   <td><b>{{r.id}}</b></td><td>{{r.house}}</td><td>{{r.floor}}</td><td>{{r.label}}</td><td>{{r.area}} м²</td>
+   <td>{% if r.n %}<span class=ok>{{r.n}}</span>{% else %}<span class=bad>нет</span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+ </table>
+</div>
+<p class=muted><a href="{{url_for('admin.logout')}}">Выйти</a></p>"""
+
 _PROJ_HTML = _CSS + """<title>{{proj.name}}</title>
-<p><a href="{{url_for('admin.dashboard')}}">← все фиды</a></p>
+<p><a href="{{url_for('admin.dashboard')}}">← все фиды</a> · <a href="{{url_for('admin.views_page',slug=slug)}}">виды из окон</a></p>
 <h1>{{proj.name}} <span class=pill>{{slug}}</span></h1>""" + _FLASH + """
 
 <div class=row>

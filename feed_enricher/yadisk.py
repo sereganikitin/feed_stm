@@ -64,42 +64,40 @@ def _list_items(public_key: str, path: str = None) -> list[dict]:
     return _api_get("", params).get("_embedded", {}).get("items", [])
 
 
-def sync_view_folders(public_key: str, dest_base: Path, wanted_ids=None,
+def sync_view_folders(public_key: str, dest_base: Path, resolve,
                       max_side: int = 2560, quality: int = 86) -> dict:
-    """Обход публичной папки видов: этаж/секция → папка лота с «_id: <ExternalId>» в названии.
-    Качает виды лота в dest_base/<id>/ (идемпотентно). Возвращает {id: [имена файлов]}.
-    Скачиваются только лоты из wanted_ids (если задан) — чтобы не тянуть лишнее."""
+    """Обход публичной папки видов. Для каждой папки вызывает resolve(name, ancestors)
+    → ExternalId лота или None. Если id вернулся — качает картинки папки в dest_base/<id>/
+    (идемпотентно); иначе спускается глубже. ancestors — список имён родительских папок
+    (этаж/секция) для маппинга. Возвращает {id: [имена файлов]}."""
     result: dict = {}
 
-    def walk(path):
+    def walk(path, ancestors):
         for it in _list_items(public_key, path):
             if it.get("type") != "dir":
                 continue
-            m = re.search(r"id[:\s]*([0-9]{4,})", it["name"])
-            if not m:
-                walk(it["path"])           # это этаж/секция — спускаемся глубже
-                continue
-            iid = m.group(1)
-            if wanted_ids is not None and iid not in wanted_ids:
-                continue
-            dest = dest_base / iid
-            names = []
-            for f in _list_items(public_key, it["path"]):
-                if f.get("type") != "file" or not (f.get("mime_type") or "").startswith("image/"):
-                    continue
-                out = dest / (Path(f["name"]).stem + ".jpg")
-                if not out.exists():
-                    href = _api_get("/download", {"public_key": public_key, "path": f["path"]})["href"]
-                    req = urllib.request.Request(href, headers={"User-Agent": "feed-enricher"})
-                    with _open(req, timeout=180) as r:
-                        raw = r.read()
-                    save_resized_jpeg(raw, out, max_side=max_side, quality=quality)
-                    time.sleep(0.4)
-                names.append(out.name)
-            if names:
-                result[iid] = sorted(names)
+            iid = resolve(it["name"], ancestors)
+            if iid:
+                dest = dest_base / iid
+                names = []
+                for f in _list_items(public_key, it["path"]):
+                    if f.get("type") != "file" or not (f.get("mime_type") or "").startswith("image/"):
+                        continue
+                    out = dest / (Path(f["name"]).stem + ".jpg")
+                    if not out.exists():
+                        href = _api_get("/download", {"public_key": public_key, "path": f["path"]})["href"]
+                        req = urllib.request.Request(href, headers={"User-Agent": "feed-enricher"})
+                        with _open(req, timeout=180) as r:
+                            raw = r.read()
+                        save_resized_jpeg(raw, out, max_side=max_side, quality=quality)
+                        time.sleep(0.4)
+                    names.append(out.name)
+                if names:
+                    result[iid] = sorted(names)
+            else:
+                walk(it["path"], ancestors + [it["name"]])
 
-    walk(None)
+    walk(None, [])
     return result
 
 

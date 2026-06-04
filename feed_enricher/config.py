@@ -54,8 +54,14 @@ PROJECTS = {
             "replace_markers":   ["/uploads/house/", "/uploads/facade/", "/uploads/building_image/"],
         },
         "sales_agent": {"organization": "St MICHAEL", "category": "застройщик", "url": "https://stmichael.ru"},
-        # ─── Виды из окон по лотам (Я.Диск: этаж → папка лота с «_id: <ExternalId>») ───
-        "views_yadisk_public_key": "https://disk.360.yandex.ru/d/csRx3vArvfTcPA",
+        # ─── Виды из окон по лотам (несколько источников на Я.Диске) ───
+        # mode "id"        — папка лота содержит «_id: <ExternalId>» в названии;
+        # mode "flatnumber"— этаж → секция → «… - <apt>.<sub>», маппинг по FlatNumber
+        #                    (ЗГ<korpus>-<этаж>-…-<apt>/<sub>), korpus задаётся в источнике.
+        "views_sources": [
+            {"public_key": "https://disk.360.yandex.ru/d/csRx3vArvfTcPA", "mode": "id"},
+            {"public_key": "https://disk.360.yandex.ru/d/m0i7Gq5M2G2n7Q", "mode": "flatnumber", "korpus": "3"},
+        ],
         # ─── Раскладка шаблона Зорге 9 (1200×900) ───
         # Шаблон уже содержит брендинг/фото справа + статичные метки слева.
         # Заполняем только пустые «значения»:

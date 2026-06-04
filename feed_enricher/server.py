@@ -8,7 +8,7 @@ Endpoints:
   GET  /                          → список проектов и ссылок
 """
 from pathlib import Path
-import os, json, threading, time
+import os, re, json, threading, time
 import requests
 from flask import Flask, send_file, abort, jsonify
 
@@ -52,14 +52,39 @@ def refresh_project(slug: str) -> dict:
             except Exception as e:
                 fail += 1
                 print(f"[{slug}] enrich error {lot.internal_id}: {e}")
-        # Виды из окон по лотам (Я.Диск: этаж → папка лота с «_id: <ExternalId>»)
-        vkey = proj.get("views_yadisk_public_key")
-        if vkey:
-            try:
-                vm = sync_view_folders(vkey, dirs["views"], {l.internal_id for l in lots})
-                print(f"[{slug}] views synced for {len(vm)} lots")
-            except Exception as e:
-                print(f"[{slug}] views sync failed: {e}")
+        # Виды из окон по лотам — несколько источников Я.Диска (id-папки и flatnumber-папки)
+        sources = proj.get("views_sources") or []
+        if sources:
+            wanted = {l.internal_id for l in lots}
+            flat_key2id = {}
+            for l in lots:
+                m = re.match(r"ЗГ(\d+)-(\d+)-\d+-(\d+)(?:/(\d+))?", l.flat_number or "")
+                if m:
+                    flat_key2id[(m.group(1), m.group(2), m.group(3), m.group(4) or "0")] = l.internal_id
+
+            def res_id(name, anc):
+                m = re.search(r"id[:\s]*([0-9]{4,})", name)
+                return m.group(1) if (m and m.group(1) in wanted) else None
+
+            def make_res_fn(korpus):
+                def res(name, anc):
+                    m = re.search(r"(\d+)\.(\d+)\s*$", name)
+                    if not m:
+                        return None
+                    floor = next((str(int(a.strip())) for a in anc if a.strip().isdigit()), None)
+                    if floor is None:
+                        return None
+                    return (flat_key2id.get((korpus, floor, m.group(1), m.group(2)))
+                            or flat_key2id.get((korpus, floor, m.group(1), "0")))
+                return res
+
+            for src in sources:
+                resolve = res_id if src.get("mode") == "id" else make_res_fn(src.get("korpus", ""))
+                try:
+                    vm = sync_view_folders(src["public_key"], dirs["views"], resolve)
+                    print(f"[{slug}] views synced {len(vm)} лотов (mode={src.get('mode')})")
+                except Exception as e:
+                    print(f"[{slug}] views sync failed ({src.get('mode')}): {e}")
 
         out = dirs["feeds"] / "feed.xml"
         assemble_feed(slug, original, lots, out)

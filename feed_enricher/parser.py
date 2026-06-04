@@ -106,6 +106,7 @@ class FeedLot:
     phone: str = ""                # <Phones><PhoneSchema> → +7XXXXXXXXXX
     description: str = ""          # <Description>
     developer: str = ""            # <JKSchema><Developer>
+    flat_number: str = ""          # <JKSchema><House><Flat><FlatNumber> (напр. ЗГ3-2-3-22/1)
     video_url: str = ""            # <Videos><VideoSchema><Url>
     # ─── срок сдачи (для Яндекс.Недвижимости) ───
     built_year: int = 0
@@ -165,6 +166,9 @@ def parse_feed(xml_bytes: bytes) -> list[FeedLot]:
             house = jk.find("House")
             if house is not None:
                 lot.house_name = (house.findtext("Name") or "").strip()
+                flat = house.find("Flat")
+                if flat is not None:
+                    lot.flat_number = (flat.findtext("FlatNumber") or "").strip()
         # Этажей всего
         bld = obj.find("Building")
         if bld is not None:

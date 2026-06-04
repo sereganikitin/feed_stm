@@ -12,7 +12,7 @@
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from .config import PUBLIC_BASE_URL, project_dirs, file_ver
+from .config import PUBLIC_BASE_URL, project_dirs, file_ver, lot_view_urls
 from .parser import FeedLot
 
 
@@ -62,6 +62,16 @@ def assemble_feed(slug: str, original_xml: bytes,
                         full = ET.SubElement(p, "FullUrl")
                     full.text = new_url
                     break
+
+        # 3) Виды из окон лота — добавляем доп. PhotoSchema
+        view_urls = lot_view_urls(slug, iid)
+        if view_urls:
+            if photos is None:
+                photos = ET.SubElement(obj, "Photos")
+            for u in view_urls:
+                ps = ET.SubElement(photos, "PhotoSchema")
+                ET.SubElement(ps, "FullUrl").text = u
+                ET.SubElement(ps, "IsDefault").text = "0"
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     ET.ElementTree(root).write(out_path, encoding="utf-8", xml_declaration=True)

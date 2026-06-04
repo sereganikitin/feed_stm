@@ -23,7 +23,7 @@ import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from .config import PUBLIC_BASE_URL, PROJECTS, project_dirs, get_project, file_ver
+from .config import PUBLIC_BASE_URL, PROJECTS, project_dirs, get_project, file_ver, lot_view_urls
 from .parser import FeedLot, rooms_from_description
 
 
@@ -79,6 +79,7 @@ def _cover_and_photos(slug: str, lot: FeedLot, enriched_dir: Path) -> list[str]:
         urls.extend(real_photos)
     elif lot.plan_url:
         urls.append(lot.plan_url)
+    urls.extend(lot_view_urls(slug, lot.internal_id))   # виды из окон
     # Авито: максимум 40 изображений
     return urls[:40]
 
@@ -248,6 +249,14 @@ def enrich_pb_avito_feed(slug: str, avito_xml: bytes, out_path: Path) -> Path:
                 if any(m in (img.get("url") or "") for m in _PLAN_URL_MARKERS):
                     imgs.remove(img)
             imgs.insert(0, ET.Element("Image", {"url": _enriched_url(slug, iid)}))
+
+        # Виды из окон лота (если есть) — в конец
+        view_urls = lot_view_urls(slug, iid)
+        if view_urls:
+            if imgs is None:
+                imgs = ET.SubElement(ad, "Images")
+            for u in view_urls:
+                ET.SubElement(imgs, "Image", {"url": u})
 
         # Авито: не более 40 изображений
         if imgs is not None:

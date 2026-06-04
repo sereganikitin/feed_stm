@@ -54,6 +54,8 @@ PROJECTS = {
             "replace_markers":   ["/uploads/house/", "/uploads/facade/", "/uploads/building_image/"],
         },
         "sales_agent": {"organization": "St MICHAEL", "category": "застройщик", "url": "https://stmichael.ru"},
+        # ─── Виды из окон по лотам (Я.Диск: этаж → папка лота с «_id: <ExternalId>») ───
+        "views_yadisk_public_key": "https://disk.360.yandex.ru/d/csRx3vArvfTcPA",
         # ─── Раскладка шаблона Зорге 9 (1200×900) ───
         # Шаблон уже содержит брендинг/фото справа + статичные метки слева.
         # Заполняем только пустые «значения»:
@@ -173,6 +175,7 @@ def project_dirs(slug: str) -> dict:
         "feeds":     base / "feeds",
         "extra":         base / "extra",          # фото для карточки Авито
         "extra_yandex":  base / "extra_yandex",   # фото для карточки Яндекс.Недвижимости
+        "views":         base / "views",          # виды из окон по лотам: views/<id>/*.jpg
     }
     for d in dirs.values():
         d.mkdir(parents=True, exist_ok=True)
@@ -230,6 +233,15 @@ def file_ver(path) -> str:
         return str(int(Path(path).stat().st_mtime))
     except Exception:
         return "0"
+
+
+def lot_view_urls(slug: str, internal_id: str) -> list:
+    """URL видов из окон лота (cache/<slug>/views/<id>/*.jpg) с версией в пути."""
+    vdir = CACHE_DIR / slug / "views" / internal_id
+    if not vdir.exists():
+        return []
+    return [f"{PUBLIC_BASE_URL}/views/{slug}/{internal_id}/{file_ver(f)}/{f.name}"
+            for f in sorted(vdir.glob("*.jpg"))]
 
 
 def get_project(slug: str) -> dict:

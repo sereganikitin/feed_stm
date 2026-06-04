@@ -12,7 +12,7 @@ import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from .config import PUBLIC_BASE_URL, project_dirs, get_project, file_ver
+from .config import PUBLIC_BASE_URL, project_dirs, get_project, file_ver, lot_view_urls
 from .parser import FeedLot
 
 NS = "http://webmaster.yandex.ru/schemas/feed/realty/2010-06"
@@ -141,6 +141,8 @@ def assemble_yandex_feed(slug: str, lots: list[FeedLot], coords: dict,
         if png.exists():
             _e(o, "image", f"{PUBLIC_BASE_URL}/enriched/{slug}/{file_ver(png)}/{lot.internal_id}.png")
         for u in photo_urls:
+            _e(o, "image", u)
+        for u in lot_view_urls(slug, lot.internal_id):   # виды из окон
             _e(o, "image", u)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)

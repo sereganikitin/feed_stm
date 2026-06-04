@@ -10,6 +10,7 @@
 """
 import io
 import json
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -54,6 +55,52 @@ def _api_get(endpoint: str, params: dict) -> dict:
     url = f"{_API}{endpoint}?{urllib.parse.urlencode(params)}"
     with _open(url, timeout=60) as r:
         return json.load(r)
+
+
+def _list_items(public_key: str, path: str = None) -> list[dict]:
+    params = {"public_key": public_key, "limit": "500"}
+    if path:
+        params["path"] = path
+    return _api_get("", params).get("_embedded", {}).get("items", [])
+
+
+def sync_view_folders(public_key: str, dest_base: Path, wanted_ids=None,
+                      max_side: int = 2560, quality: int = 86) -> dict:
+    """Обход публичной папки видов: этаж/секция → папка лота с «_id: <ExternalId>» в названии.
+    Качает виды лота в dest_base/<id>/ (идемпотентно). Возвращает {id: [имена файлов]}.
+    Скачиваются только лоты из wanted_ids (если задан) — чтобы не тянуть лишнее."""
+    result: dict = {}
+
+    def walk(path):
+        for it in _list_items(public_key, path):
+            if it.get("type") != "dir":
+                continue
+            m = re.search(r"id[:\s]*([0-9]{4,})", it["name"])
+            if not m:
+                walk(it["path"])           # это этаж/секция — спускаемся глубже
+                continue
+            iid = m.group(1)
+            if wanted_ids is not None and iid not in wanted_ids:
+                continue
+            dest = dest_base / iid
+            names = []
+            for f in _list_items(public_key, it["path"]):
+                if f.get("type") != "file" or not (f.get("mime_type") or "").startswith("image/"):
+                    continue
+                out = dest / (Path(f["name"]).stem + ".jpg")
+                if not out.exists():
+                    href = _api_get("/download", {"public_key": public_key, "path": f["path"]})["href"]
+                    req = urllib.request.Request(href, headers={"User-Agent": "feed-enricher"})
+                    with _open(req, timeout=180) as r:
+                        raw = r.read()
+                    save_resized_jpeg(raw, out, max_side=max_side, quality=quality)
+                    time.sleep(0.4)
+                names.append(out.name)
+            if names:
+                result[iid] = sorted(names)
+
+    walk(None)
+    return result
 
 
 def list_public_images(public_key: str, path: str) -> list[dict]:

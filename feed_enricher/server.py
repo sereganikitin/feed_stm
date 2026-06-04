@@ -22,7 +22,7 @@ from .enricher import enrich_lot, installment_values
 from .assembler import assemble_feed
 from .assembler_avito import assemble_avito_feed, enrich_pb_avito_feed
 from .assembler_yandex import assemble_yandex_feed, coords_from_avito
-from .yadisk import sync_public_folder
+from .yadisk import sync_public_folder, sync_view_folders
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "change-me-in-env")
@@ -52,6 +52,15 @@ def refresh_project(slug: str) -> dict:
             except Exception as e:
                 fail += 1
                 print(f"[{slug}] enrich error {lot.internal_id}: {e}")
+        # Виды из окон по лотам (Я.Диск: этаж → папка лота с «_id: <ExternalId>»)
+        vkey = proj.get("views_yadisk_public_key")
+        if vkey:
+            try:
+                vm = sync_view_folders(vkey, dirs["views"], {l.internal_id for l in lots})
+                print(f"[{slug}] views synced for {len(vm)} lots")
+            except Exception as e:
+                print(f"[{slug}] views sync failed: {e}")
+
         out = dirs["feeds"] / "feed.xml"
         assemble_feed(slug, original, lots, out)
         # Авито-фид. Вариант A: native-выгрузка ProfitBase + подмена обложки.
@@ -290,6 +299,22 @@ def serve_extra_v(slug: str, ver: str, name: str):
 @app.route("/extra_yandex/<slug>/<ver>/<name>")
 def serve_extra_yandex_v(slug: str, ver: str, name: str):
     return serve_extra_yandex(slug, name)
+
+
+@app.route("/views/<slug>/<lot>/<name>")
+def serve_view(slug: str, lot: str, name: str):
+    """Виды из окон лота."""
+    if slug not in PROJECTS or any(c in (lot + name) for c in "/\\"):
+        abort(404)
+    p = project_dirs(slug)["views"] / lot / name
+    if not p.exists():
+        abort(404)
+    return send_file(p, mimetype="image/jpeg")
+
+
+@app.route("/views/<slug>/<lot>/<ver>/<name>")
+def serve_view_v(slug: str, lot: str, ver: str, name: str):
+    return serve_view(slug, lot, name)
 
 
 @app.route("/refresh/<slug>", methods=["POST"])

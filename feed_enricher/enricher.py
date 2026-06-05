@@ -126,6 +126,40 @@ def _draw_field(draw: ImageDraw.ImageDraw, field: dict, text: str):
     )
 
 
+def enrich_commercial(lot, plan_url: str, template_url: str, template_ext: str,
+                      layout: dict, templates_dir: Path, plans_dir: Path, out_path: Path) -> Path:
+    """Обогащённая планировка коммерческого помещения: шаблон Б37 + план + подписи
+    Площадь/Высота/Мощность (вместо Комнаты/Площадь/Этаж). Идемпотентно по out_path."""
+    if out_path.exists():
+        return out_path
+    canvas = _http_get_image(template_url, templates_dir / f"template.{template_ext}") \
+        .convert("RGBA").resize(layout["size"], Image.LANCZOS)
+    if plan_url:
+        h = hashlib.md5(plan_url.encode("utf-8")).hexdigest()[:16]
+        plan = _http_get_image(plan_url, plans_dir / f"{h}.jpg")
+        box = layout["plan_box"]
+        tw, th = box[2] - box[0], box[3] - box[1]
+        pr = plan.copy(); pr.thumbnail((tw, th), Image.LANCZOS)
+        canvas.alpha_composite(pr, (box[0] + (tw - pr.width) // 2, box[1] + (th - pr.height) // 2))
+
+    draw = ImageDraw.Draw(canvas)
+    ov = layout.get("header_overlay")
+    if ov:
+        draw.rectangle(ov["clear_rect"], fill=ov.get("clear_color", (255, 255, 255)) + (255,))
+        for lbl in ov.get("labels", []):
+            _draw_field(draw, lbl, lbl["text"])
+
+    area_s = f"{lot.area:.1f}".rstrip("0").rstrip(".").replace(".", ",") if lot.area else ""
+    ceil_s = f"{lot.ceiling_m:.2f}".rstrip("0").rstrip(".").replace(".", ",") if lot.ceiling_m else ""
+    pow_s = (lot.power_kw or "").replace(".", ",")
+    for key, val in [("area_value", area_s), ("ceiling_value", ceil_s), ("power_value", pow_s)]:
+        if key in layout and val:
+            _draw_field(draw, layout[key], val)
+
+    canvas.convert("RGB").save(out_path, "PNG", optimize=True)
+    return out_path
+
+
 def enrich_lot(slug: str, lot: FeedLot) -> Path:
     """Создаёт обогащенную планировку для лота. Идемпотентно по id."""
     proj = get_project(slug)

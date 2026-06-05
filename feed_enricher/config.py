@@ -232,6 +232,27 @@ def set_override(slug: str, key: str, value) -> None:
     save_overrides(data)
 
 
+# ═══ Обогащение коммерции (переиспользуем шаблон Б37, подписи Площадь/Высота/Мощность) ═══
+COMMERCIAL_TEMPLATE_URL = "https://static.tildacdn.com/tild3735-3765-4137-a130-376363353730/plan-ksb.png"
+COMMERCIAL_TEMPLATE_EXT = "png"
+COMMERCIAL_LAYOUT = {
+    "size":       (1150, 1040),
+    "plan_box":   (604, 324, 1046, 880),
+    "header_overlay": {
+        "clear_rect": (560, 165, 1085, 248),
+        "clear_color": (255, 255, 255),
+        "labels": [
+            {"pos": (640,  235), "size": 20, "color": (20, 30, 50), "anchor": "mm", "text": "Площадь"},
+            {"pos": (843,  235), "size": 20, "color": (20, 30, 50), "anchor": "mm", "text": "Высота"},
+            {"pos": (1029, 235), "size": 20, "color": (20, 30, 50), "anchor": "mm", "text": "Мощность"},
+        ],
+    },
+    "area_value":    {"pos": (640,  178), "size": 60, "color": (20, 30, 50), "anchor": "mm"},
+    "ceiling_value": {"pos": (843,  178), "size": 60, "color": (20, 30, 50), "anchor": "mm"},
+    "power_value":   {"pos": (1029, 178), "size": 50, "color": (20, 30, 50), "anchor": "mm"},
+}
+
+
 def file_ver(path) -> str:
     """Версия файла для cache-busting ссылок (?v=...). Меняется при перезаписи файла —
     тогда классифайд (Авито/Яндекс) видит новый URL и перезабирает картинку."""

@@ -32,6 +32,7 @@ from .assembler_yandex import assemble_yandex_feed, coords_from_avito
 from .assembler import assemble_feed
 from .enricher import enrich_lot
 from .parser import parse_feed
+from . import commercial as comm
 
 # Два набора фото: Авито и Яндекс — общий код, разные каталоги/настройки/фид
 _KINDS = {
@@ -272,6 +273,72 @@ def project(slug: str):
     )
 
 
+@admin_bp.route("/commercial")
+@login_required
+def commercial_page():
+    projs = comm.load_projects()
+    rows = []
+    for slug, p in projs.items():
+        d = comm.comm_dirs(slug)
+        try:
+            import xml.etree.ElementTree as _ET
+            n = len(_ET.parse(d["feeds"] / "yandex.xml").getroot()) - 1 if (d["feeds"] / "yandex.xml").exists() else 0
+        except Exception:
+            n = 0
+        rows.append({"slug": slug, "p": p, "n": max(n, 0),
+                     "enriched": len(list(d["enriched"].glob("*.png")))})
+    return render_template_string(_COMM_HTML, rows=rows, base=PUBLIC_BASE_URL)
+
+
+@admin_bp.route("/commercial/save", methods=["POST"])
+@login_required
+def commercial_save():
+    f = request.form
+    slug = re.sub(r"[^a-z0-9]", "", (f.get("slug", "").strip().lower())) or f"comm{int(time.time())}"
+    plats = [p for p in ("cian", "avito", "yandex") if f.get(p) == "on"]
+    projs = comm.load_projects()
+    projs[slug] = {
+        "name": f.get("name", "").strip() or slug,
+        "source_url": f.get("source_url", "").strip(),
+        "platforms": plats,
+        "address": f.get("address", "").strip(),
+        "sales_agent": {"organization": f.get("org", "").strip(), "category": "застройщик",
+                        "phone": f.get("phone", "").strip(), "url": f.get("url", "").strip()},
+        "yadisk_fallback": f.get("yadisk_fallback", "").strip(),
+    }
+    comm.save_projects(projs)
+    try:
+        r = comm.refresh_commercial(slug)
+        flash(f"Фид «{projs[slug]['name']}» сформирован: лотов {r.get('lots')}, площадки {', '.join(plats) or '—'}.")
+    except Exception as e:
+        flash(f"Сохранено, но при формировании ошибка: {e}")
+    return redirect(url_for("admin.commercial_page"))
+
+
+@admin_bp.route("/commercial/<slug>/refresh", methods=["POST"])
+@login_required
+def commercial_refresh(slug: str):
+    if slug not in comm.load_projects():
+        abort(404)
+    try:
+        r = comm.refresh_commercial(slug)
+        flash(f"Обновлено: лотов {r.get('lots')}, обогащено {r.get('enriched')}.")
+    except Exception as e:
+        flash(f"Ошибка: {e}")
+    return redirect(url_for("admin.commercial_page"))
+
+
+@admin_bp.route("/commercial/<slug>/delete", methods=["POST"])
+@login_required
+def commercial_delete(slug: str):
+    projs = comm.load_projects()
+    if slug in projs:
+        del projs[slug]
+        comm.save_projects(projs)
+        flash(f"Удалён проект {slug}.")
+    return redirect(url_for("admin.commercial_page"))
+
+
 @admin_bp.route("/<slug>/views")
 @login_required
 def views_page(slug: str):
@@ -477,6 +544,7 @@ _DASH_HTML = _CSS + """<title>Фиды</title>
   {% endfor %}
  </table>
 </div>
+<p><a class=btn gray href="{{url_for('admin.commercial_page')}}">🏢 Коммерческие фиды (мастер)</a></p>
 <p class=muted><a href="{{url_for('admin.logout')}}">Выйти</a></p>"""
 
 _VIEWS_HTML = _CSS + """<title>Виды — {{name}}</title>
@@ -495,6 +563,49 @@ _VIEWS_HTML = _CSS + """<title>Виды — {{name}}</title>
   </tr>
   {% endfor %}
  </table>
+</div>
+<p class=muted><a href="{{url_for('admin.logout')}}">Выйти</a></p>"""
+
+_COMM_HTML = _CSS + """<title>Коммерческие фиды</title>
+<p><a href="{{url_for('admin.dashboard')}}">← все фиды</a></p>
+<h1>Мастер фидов (коммерция / аренда)</h1>""" + _FLASH + """
+<div class=card>
+ <h2 style="margin-top:0">Готовые фиды</h2>
+ {% if not rows %}<p class=muted>Пока нет. Добавьте ниже.</p>{% endif %}
+ {% for r in rows %}
+  <div style="border-bottom:1px solid #eef1f5;padding:10px 0">
+   <b>{{r.p.name}}</b> <span class=pill>{{r.slug}}</span> · лотов ~{{r.n}}, планировок {{r.enriched}}
+   <div class=muted style="margin:4px 0">{{r.p.source_url[:70]}}…</div>
+   <div>Фиды:
+    {% for pl in r.p.platforms %}<a href="{{base}}/feed/comm/{{r.slug}}-{{pl}}.xml" target=_blank>{{pl}}</a>{% if not loop.last %} · {% endif %}{% endfor %}
+    {% if not r.p.platforms %}<span class=muted>площадки не выбраны</span>{% endif %}
+   </div>
+   <form method=post action="{{url_for('admin.commercial_refresh',slug=r.slug)}}" style="display:inline">
+     <button class="btn green">Пересформировать</button></form>
+   <form method=post action="{{url_for('admin.commercial_delete',slug=r.slug)}}" style="display:inline">
+     <button class="btn red" onclick="return confirm('Удалить {{r.slug}}?')">Удалить</button></form>
+  </div>
+ {% endfor %}
+</div>
+<div class=card>
+ <h2 style="margin-top:0">Добавить / обновить фид</h2>
+ <form method=post action="{{url_for('admin.commercial_save')}}">
+  <label>Название</label><input type=text name=name placeholder="Например: Б37 Коммерция">
+  <label>Код (slug, латиницей; пусто = авто)</label><input type=text name=slug placeholder="b37comm">
+  <label>Ссылка на фид ProfitBase (profitbase_xml)</label><input type=text name=source_url placeholder="https://pb7828.profitbase.ru/export/profitbase_xml/...">
+  <label>Площадки</label>
+  <div><label style="display:inline"><input type=checkbox name=cian checked> ЦИАН</label>
+   <label style="display:inline;margin-left:14px"><input type=checkbox name=avito checked> Авито</label>
+   <label style="display:inline;margin-left:14px"><input type=checkbox name=yandex checked> Яндекс</label></div>
+  <label>Адрес</label><input type=text name=address placeholder="Москва, улица Берзарина, 37">
+  <div class=row><div class=col><label>Телефон</label><input type=text name=phone placeholder="+74952924193"></div>
+   <div class=col><label>Организация</label><input type=text name=org placeholder="St MICHAEL"></div></div>
+  <label>Сайт (опц.)</label><input type=text name=url placeholder="https://stmichael.ru">
+  <label>Папка Я.Диска с картинками — фолбэк, если в ProfitBase их нет (опц.)</label>
+  <input type=text name=yadisk_fallback placeholder="https://disk.360.yandex.ru/d/...">
+  <div style="margin-top:14px"><button class=btn>Сформировать фид</button></div>
+ </form>
+ <p class=muted style="margin-top:10px">⚠️ Коммерческие схемы площадок строже жилья — после формирования прогоните фид через валидатор площадки (например autoload.avito.ru/format/xmlcheck). Обогащённые планировки — на шаблоне с подписями Площадь/Высота/Мощность.</p>
 </div>
 <p class=muted><a href="{{url_for('admin.logout')}}">Выйти</a></p>"""
 

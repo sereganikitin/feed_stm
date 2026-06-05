@@ -23,6 +23,7 @@ from .assembler import assemble_feed
 from .assembler_avito import assemble_avito_feed, enrich_pb_avito_feed
 from .assembler_yandex import assemble_yandex_feed, coords_from_avito
 from .yadisk import sync_public_folder, sync_view_folders
+from . import commercial as comm
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "change-me-in-env")
@@ -162,6 +163,10 @@ def _refresh_loop():
             print(f"[auto-refresh] {refresh_all()}")
         except Exception as e:
             print(f"[auto-refresh] error: {e}")
+        try:
+            print(f"[auto-refresh-comm] {comm.refresh_all_commercial()}")
+        except Exception as e:
+            print(f"[auto-refresh-comm] error: {e}")
         time.sleep(REFRESH_INTERVAL_HOURS * 3600)
 
 
@@ -340,6 +345,40 @@ def serve_view(slug: str, lot: str, name: str):
 @app.route("/views/<slug>/<lot>/<ver>/<name>")
 def serve_view_v(slug: str, lot: str, ver: str, name: str):
     return serve_view(slug, lot, name)
+
+
+# ──────────────── Коммерческие фиды ────────────────
+
+@app.route("/feed/comm/<slug>-<platform>.xml")
+def serve_comm_feed(slug: str, platform: str):
+    if slug not in comm.load_projects() or platform not in comm._PLATFORM_FILE:
+        abort(404)
+    p = comm.comm_dirs(slug)["feeds"] / comm._PLATFORM_FILE[platform]
+    if not p.exists():
+        comm.refresh_commercial(slug)
+    if not p.exists():
+        abort(503)
+    return send_file(p, mimetype="application/xml")
+
+
+@app.route("/commercial/<slug>/<kind>/<name>")
+def serve_comm_img(slug: str, kind: str, name: str):
+    if kind not in ("enriched", "extra") or "/" in name or "\\" in name:
+        abort(404)
+    p = comm.comm_dirs(slug)[kind] / name
+    if not p.exists():
+        abort(404)
+    return send_file(p, mimetype="image/png" if kind == "enriched" else "image/jpeg")
+
+
+@app.route("/commercial/<slug>/<kind>/<ver>/<name>")
+def serve_comm_img_v(slug: str, kind: str, ver: str, name: str):
+    return serve_comm_img(slug, kind, name)
+
+
+@app.route("/refresh-commercial", methods=["POST"])
+def manual_refresh_commercial():
+    return jsonify(comm.refresh_all_commercial())
 
 
 @app.route("/refresh/<slug>", methods=["POST"])

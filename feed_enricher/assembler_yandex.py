@@ -136,13 +136,15 @@ def assemble_yandex_feed(slug: str, lots: list[FeedLot], coords: dict,
         if lot.description:
             _e(o, "description", _clean_desc(lot.description))
 
-        # Картинки: обложка (наша планировка) + наши фото
+        # Картинки. Порядок: планировка (Яндекс ждёт её первым тегом) → виды из окон
+        # → фото. Ограничиваем ~20 — иначе Яндекс режет/отбрасывает (фото у нас много).
+        imgs = []
         png = enriched_dir / f"{lot.internal_id}.png"
         if png.exists():
-            _e(o, "image", f"{PUBLIC_BASE_URL}/enriched/{slug}/{file_ver(png)}/{lot.internal_id}.png")
-        for u in photo_urls:
-            _e(o, "image", u)
-        for u in lot_view_urls(slug, lot.internal_id):   # виды из окон
+            imgs.append(f"{PUBLIC_BASE_URL}/enriched/{slug}/{file_ver(png)}/{lot.internal_id}.png")
+        imgs += lot_view_urls(slug, lot.internal_id)   # виды сразу после планировки
+        imgs += photo_urls
+        for u in imgs[:20]:
             _e(o, "image", u)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)

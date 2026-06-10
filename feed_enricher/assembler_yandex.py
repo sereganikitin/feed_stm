@@ -136,15 +136,15 @@ def assemble_yandex_feed(slug: str, lots: list[FeedLot], coords: dict,
         if lot.description:
             _e(o, "description", _clean_desc(lot.description))
 
-        # Картинки. Порядок: планировка (Яндекс ждёт её первым тегом) → виды из окон
-        # → фото. Ограничиваем ~20 — иначе Яндекс режет/отбрасывает (фото у нас много).
-        imgs = []
-        png = enriched_dir / f"{lot.internal_id}.png"
-        if png.exists():
-            imgs.append(f"{PUBLIC_BASE_URL}/enriched/{slug}/{file_ver(png)}/{lot.internal_id}.png")
-        imgs += lot_view_urls(slug, lot.internal_id)   # виды сразу после планировки
-        imgs += photo_urls
-        for u in imgs[:20]:
+        # Картинки. Порядок: планировка (Яндекс ждёт её первым тегом) → фото → виды.
+        # Всего не больше 30 (Яндекс режет хвост) — фото подрезаем так, чтобы виды
+        # гарантированно вошли в эти 30 (виды — последними, но не теряются).
+        MAX_IMG = 30
+        plan = [f"{PUBLIC_BASE_URL}/enriched/{slug}/{file_ver(enriched_dir / f'{lot.internal_id}.png')}/{lot.internal_id}.png"] \
+            if (enriched_dir / f"{lot.internal_id}.png").exists() else []
+        views = lot_view_urls(slug, lot.internal_id)
+        budget = max(0, MAX_IMG - len(plan) - len(views))
+        for u in plan + photo_urls[:budget] + views:
             _e(o, "image", u)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)

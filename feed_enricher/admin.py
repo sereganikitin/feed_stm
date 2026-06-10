@@ -100,8 +100,10 @@ def _status() -> dict:
 
 
 def _count(path: Path, tag: str) -> int:
+    # сравниваем по локальному имени тега — Яндекс-фид в namespace (offer => {...}offer)
     try:
-        return len(list(ET.parse(path).getroot().iter(tag)))
+        return sum(1 for e in ET.parse(path).getroot().iter()
+                   if e.tag.split("}")[-1] == tag)
     except Exception:
         return 0
 

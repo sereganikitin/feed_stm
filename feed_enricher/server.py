@@ -35,6 +35,66 @@ from .admin import admin_bp
 app.register_blueprint(admin_bp)
 
 
+def _sync_views(slug, dirs, lots):
+    """Синк видов из всех источников Я.Диска проекта (зеркалирование)."""
+    sources = PROJECTS[slug].get("views_sources") or []
+    if not sources:
+        return
+    wanted = {l.internal_id for l in lots}
+    flat_key2id = {}
+    for l in lots:
+        m = re.match(r"ЗГ(\d+)-(\d+)-\d+-(\d+)(?:/(\d+))?", l.flat_number or "")
+        if m:
+            flat_key2id[(m.group(1), m.group(2), m.group(3), m.group(4) or "0")] = l.internal_id
+
+    def res_id(name, anc):
+        m = re.search(r"id[:\s]*([0-9]{4,})", name)
+        return m.group(1) if (m and m.group(1) in wanted) else None
+
+    def make_res_fn(korpus):
+        def res(name, anc):
+            m = re.search(r"(\d+)\.(\d+)\s*$", name)
+            if not m:
+                return None
+            floor = next((str(int(a.strip())) for a in anc if a.strip().isdigit()), None)
+            if floor is None:
+                return None
+            return (flat_key2id.get((korpus, floor, m.group(1), m.group(2)))
+                    or flat_key2id.get((korpus, floor, m.group(1), "0")))
+        return res
+
+    for src in sources:
+        resolve = res_id if src.get("mode") == "id" else make_res_fn(src.get("korpus", ""))
+        try:
+            vm = sync_view_folders(src["public_key"], dirs["views"], resolve)
+            print(f"[{slug}] views synced {len(vm)} лотов (mode={src.get('mode')})")
+        except Exception as e:
+            print(f"[{slug}] views sync failed ({src.get('mode')}): {e}")
+
+
+def resync_views(slug: str):
+    """Часовой ресинк видов: зеркалит ЯД и пересобирает фиды (без перерисовки планировок)."""
+    proj = PROJECTS.get(slug)
+    if not proj or not proj.get("views_sources"):
+        return
+    d = project_dirs(slug)
+    cian = d["feeds"] / "original.xml"
+    if not cian.exists():
+        return
+    with _lock:
+        raw = cian.read_bytes()
+        lots = parse_feed(raw)
+        _sync_views(slug, d, lots)
+        assemble_feed(slug, raw, lots, d["feeds"] / "feed.xml")
+        av = d["feeds"] / "original_avito.xml"
+        if proj.get("pb_avito_feed_url") and av.exists():
+            enrich_pb_avito_feed(slug, av.read_bytes(), d["feeds"] / "avito.xml")
+        if proj.get("yandex_building_id"):
+            coords = coords_from_avito(av.read_bytes()) if av.exists() else {}
+            now = time.strftime("%Y-%m-%dT%H:%M:%S+03:00")
+            assemble_yandex_feed(slug, lots, coords, d["feeds"] / "yandex.xml", now)
+
+
 def refresh_project(slug: str) -> dict:
     """Скачать → сгенерить планировки → собрать XML → (опц.) залить в ProfitBase."""
     proj = PROJECTS[slug]
@@ -53,39 +113,8 @@ def refresh_project(slug: str) -> dict:
             except Exception as e:
                 fail += 1
                 print(f"[{slug}] enrich error {lot.internal_id}: {e}")
-        # Виды из окон по лотам — несколько источников Я.Диска (id-папки и flatnumber-папки)
-        sources = proj.get("views_sources") or []
-        if sources:
-            wanted = {l.internal_id for l in lots}
-            flat_key2id = {}
-            for l in lots:
-                m = re.match(r"ЗГ(\d+)-(\d+)-\d+-(\d+)(?:/(\d+))?", l.flat_number or "")
-                if m:
-                    flat_key2id[(m.group(1), m.group(2), m.group(3), m.group(4) or "0")] = l.internal_id
-
-            def res_id(name, anc):
-                m = re.search(r"id[:\s]*([0-9]{4,})", name)
-                return m.group(1) if (m and m.group(1) in wanted) else None
-
-            def make_res_fn(korpus):
-                def res(name, anc):
-                    m = re.search(r"(\d+)\.(\d+)\s*$", name)
-                    if not m:
-                        return None
-                    floor = next((str(int(a.strip())) for a in anc if a.strip().isdigit()), None)
-                    if floor is None:
-                        return None
-                    return (flat_key2id.get((korpus, floor, m.group(1), m.group(2)))
-                            or flat_key2id.get((korpus, floor, m.group(1), "0")))
-                return res
-
-            for src in sources:
-                resolve = res_id if src.get("mode") == "id" else make_res_fn(src.get("korpus", ""))
-                try:
-                    vm = sync_view_folders(src["public_key"], dirs["views"], resolve)
-                    print(f"[{slug}] views synced {len(vm)} лотов (mode={src.get('mode')})")
-                except Exception as e:
-                    print(f"[{slug}] views sync failed ({src.get('mode')}): {e}")
+        # Виды из окон по лотам — несколько источников Я.Диска (зеркалирование)
+        _sync_views(slug, dirs, lots)
 
         out = dirs["feeds"] / "feed.xml"
         assemble_feed(slug, original, lots, out)
@@ -168,6 +197,19 @@ def _refresh_loop():
         except Exception as e:
             print(f"[auto-refresh-comm] error: {e}")
         time.sleep(REFRESH_INTERVAL_HOURS * 3600)
+
+
+def _views_loop():
+    """Раз в час: зеркалим виды из Я.Диска и пересобираем фиды (удаления подхватываются)."""
+    while True:
+        time.sleep(3600)
+        for slug in PROJECTS:
+            if PROJECTS[slug].get("views_sources"):
+                try:
+                    resync_views(slug)
+                    print(f"[views-hourly] {slug} ok")
+                except Exception as e:
+                    print(f"[views-hourly] {slug} error: {e}")
 
 
 @app.route("/")
@@ -394,8 +436,8 @@ def manual_refresh_all():
 
 
 def start_background_refresher():
-    t = threading.Thread(target=_refresh_loop, daemon=True)
-    t.start()
+    threading.Thread(target=_refresh_loop, daemon=True).start()
+    threading.Thread(target=_views_loop, daemon=True).start()
 
 
 def main():

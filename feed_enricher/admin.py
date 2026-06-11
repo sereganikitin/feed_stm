@@ -142,6 +142,18 @@ def _rebuild(slug: str, kind: str) -> None:
     _rebuild_yandex(slug) if kind == "yandex" else _rebuild_avito(slug)
 
 
+def _rebuild_all_feeds(slug: str) -> None:
+    """Пересобрать ЦИАН/Авито/Яндекс из кэша (после ручной правки видов)."""
+    d = project_dirs(slug)
+    cian = d["feeds"] / "original.xml"
+    if not cian.exists():
+        return
+    raw = cian.read_bytes()
+    assemble_feed(slug, raw, parse_feed(raw), d["feeds"] / "feed.xml")
+    _rebuild_avito(slug)
+    _rebuild_yandex(slug)
+
+
 def _regenerate_plans(slug: str) -> int:
     """Перерисовать все обогащённые планировки (после смены рассрочки/шаблона).
     Из кэша: берём сохранённый CIAN-фид, чистим PNG, рисуем заново, пересобираем 3 фида.
@@ -194,10 +206,10 @@ def _views_coverage(slug: str) -> list:
     rows = []
     for l in parse_feed(cian.read_bytes()):
         vd = vdir / l.internal_id
-        n = len(list(vd.glob("*.jpg"))) if vd.exists() else 0
+        files = sorted(p.name for p in vd.glob("*.jpg")) if vd.exists() else []
         lbl = "Ст." if l.rooms == 0 else ("СП" if l.rooms < 0 else f"{l.rooms}К")
         rows.append({"id": l.internal_id, "house": l.house_name, "floor": l.floor,
-                     "label": lbl, "area": f"{l.area_total:.1f}", "n": n})
+                     "label": lbl, "area": f"{l.area_total:.1f}", "n": len(files), "files": files})
     rows.sort(key=lambda r: (r["n"] > 0, r["house"], r["id"]))   # без видов — наверх
     return rows
 
@@ -350,6 +362,59 @@ def views_page(slug: str):
     have = sum(1 for r in rows if r["n"] > 0)
     return render_template_string(_VIEWS_HTML, slug=slug, name=PROJECTS[slug]["name"],
                                   rows=rows, have=have, total=len(rows), base=PUBLIC_BASE_URL)
+
+
+@admin_bp.route("/<slug>/views/resync", methods=["POST"])
+@login_required
+def views_resync(slug: str):
+    if slug not in PROJECTS:
+        abort(404)
+    from .server import resync_views
+    try:
+        resync_views(slug)
+        flash("Виды синхронизированы с Я.Диска (удаления/добавления подхвачены).")
+    except Exception as e:
+        flash(f"Ошибка синка: {e}")
+    return redirect(url_for("admin.views_page", slug=slug))
+
+
+@admin_bp.route("/<slug>/views/<lot>/upload", methods=["POST"])
+@login_required
+def views_upload(slug: str, lot: str):
+    if slug not in PROJECTS:
+        abort(404)
+    lot = secure_filename(lot)
+    dest = project_dirs(slug)["views"] / lot
+    dest.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for fs in request.files.getlist("photos"):
+        if fs and fs.filename:
+            try:
+                save_resized_jpeg(fs.read(), dest / f"u{int(time.time()*1000)}{n}.jpg")
+                n += 1
+            except Exception as e:
+                flash(f"{fs.filename}: {e}")
+    _rebuild_all_feeds(slug)
+    flash(f"Лот {lot}: добавлено видов {n}.")
+    return redirect(url_for("admin.views_page", slug=slug))
+
+
+@admin_bp.route("/<slug>/views/<lot>/delete", methods=["POST"])
+@login_required
+def views_delete(slug: str, lot: str):
+    if slug not in PROJECTS:
+        abort(404)
+    lot = secure_filename(lot)
+    name = secure_filename(request.form.get("name", ""))
+    vdir = project_dirs(slug)["views"] / lot
+    p = vdir / name
+    if p.exists():
+        p.unlink()
+        # сброс манифеста — чтобы следующий синк с ЯД пересверился (если в ЯД ещё есть — вернётся)
+        (vdir / "_src.json").unlink(missing_ok=True)
+    _rebuild_all_feeds(slug)
+    flash(f"Удалено: {name}. (Чтобы убрать навсегда — удалите и в папке Я.Диска.)")
+    return redirect(url_for("admin.views_page", slug=slug))
 
 
 @admin_bp.route("/<slug>/settings", methods=["POST"])
@@ -551,17 +616,31 @@ _DASH_HTML = _CSS + """<title>Фиды</title>
 
 _VIEWS_HTML = _CSS + """<title>Виды — {{name}}</title>
 <p><a href="{{url_for('admin.dashboard')}}">← все фиды</a> · <a href="{{url_for('admin.project',slug=slug)}}">{{name}}</a></p>
-<h1>Виды из окон — {{name}}</h1>
+<h1>Виды из окон — {{name}}</h1>""" + _FLASH + """
 <div class=card>
- <p>Лотов с видами: <b class=ok>{{have}}</b> из {{total}}. Без видов — <b class=bad>{{total-have}}</b> (вверху списка).</p>
- <p class=muted>Чтобы добавить виды лоту — положите его виды на Я.Диск (папка «Виды на классифайды» с «_id: ID» в названии, либо папка «03» по этажам). Подхватятся при обновлении.</p>
+ <p>Лотов с видами: <b class=ok>{{have}}</b> из {{total}}. Без видов — <b class=bad>{{total-have}}</b> (вверху).
+   <form method=post action="{{url_for('admin.views_resync',slug=slug)}}" style="display:inline;margin-left:10px">
+     <button class="btn green">↻ Синхронизировать с Я.Диска</button></form></p>
+ <p class=muted>Виды зеркалятся из Я.Диска (удаления в ЯД подхватываются; авто-синк раз в час). Можно править вручную: <b>✕</b> — удалить, <b>＋</b> — загрузить (ручные сохраняются как «u…», синк с ЯД их не трогает).</p>
  <table>
-  <tr><th></th><th>Лот (ID)</th><th>Корпус</th><th>Этаж</th><th>Тип</th><th>Площадь</th><th>Видов</th></tr>
+  <tr><th>Лот · Корпус · Этаж · Тип · Площадь</th><th>Виды (✕ удалить, ＋ добавить)</th></tr>
   {% for r in rows %}
   <tr style="{% if r.n==0 %}background:#fff5f5{% endif %}">
-   <td>{% if r.n %}<img src="{{base}}/views/{{slug}}/{{r.id}}/01.jpg" style="width:64px;height:46px;object-fit:cover;border-radius:4px"><br>{% endif %}</td>
-   <td><b>{{r.id}}</b></td><td>{{r.house}}</td><td>{{r.floor}}</td><td>{{r.label}}</td><td>{{r.area}} м²</td>
-   <td>{% if r.n %}<span class=ok>{{r.n}}</span>{% else %}<span class=bad>нет</span>{% endif %}</td>
+   <td><b>{{r.id}}</b> · {{r.house}} · эт.{{r.floor}} · {{r.label}} · {{r.area}} м²<br>
+       <span class="{% if r.n %}ok{% else %}bad{% endif %}">видов: {{r.n or 'нет'}}</span></td>
+   <td>
+     {% for fn in r.files %}
+     <span style="position:relative;display:inline-block;margin:2px">
+       <img src="{{base}}/views/{{slug}}/{{r.id}}/{{fn}}" style="width:72px;height:52px;object-fit:cover;border-radius:4px;border:1px solid #ddd">
+       <form method=post action="{{url_for('admin.views_delete',slug=slug,lot=r.id)}}" style="position:absolute;top:2px;right:2px;margin:0">
+         <input type=hidden name=name value="{{fn}}">
+         <button class=del onclick="return confirm('Удалить {{fn}}?')">✕</button></form>
+     </span>
+     {% endfor %}
+     <form method=post action="{{url_for('admin.views_upload',slug=slug,lot=r.id)}}" enctype=multipart/form-data style="display:inline">
+       <input type=file name=photos accept="image/*" multiple style="width:140px;font-size:11px">
+       <button class=btn style="padding:5px 9px">＋</button></form>
+   </td>
   </tr>
   {% endfor %}
  </table>

@@ -79,22 +79,33 @@ def sync_view_folders(public_key: str, dest_base: Path, resolve,
             iid = resolve(it["name"], ancestors)
             if iid:
                 dest = dest_base / iid
-                # сортируем исходники по имени и сохраняем как 01.jpg, 02.jpg… —
-                # чистые URL без пробелов/кириллицы (исходные имена бывают «ChatGPT Image …»)
+                dest.mkdir(parents=True, exist_ok=True)
+                # ЗЕРКАЛИРОВАНИЕ: если набор файлов в ЯД изменился (добавили/удалили) —
+                # пере-скачиваем папку лота (чистим старые числовые 01.jpg…). Ручные
+                # загрузки (u*.jpg) не трогаем. Манифест _src.json хранит имена из ЯД.
                 srcs = sorted((f for f in _list_items(public_key, it["path"])
                                if f.get("type") == "file" and (f.get("mime_type") or "").startswith("image/")),
                               key=lambda f: f["name"])
-                names = []
-                for i, f in enumerate(srcs, 1):
-                    out = dest / f"{i:02d}.jpg"
-                    if not out.exists():
+                yd_names = [f["name"] for f in srcs]
+                manifest = dest / "_src.json"
+                try:
+                    old = json.loads(manifest.read_text("utf-8"))
+                except Exception:
+                    old = None
+                if old != yd_names:
+                    for p in dest.glob("*.jpg"):
+                        if p.stem.isdigit():
+                            p.unlink()
+                    for i, f in enumerate(srcs, 1):
+                        out = dest / f"{i:02d}.jpg"
                         href = _api_get("/download", {"public_key": public_key, "path": f["path"]})["href"]
                         req = urllib.request.Request(href, headers={"User-Agent": "feed-enricher"})
                         with _open(req, timeout=180) as r:
                             raw = r.read()
                         save_resized_jpeg(raw, out, max_side=max_side, quality=quality)
                         time.sleep(0.4)
-                    names.append(out.name)
+                    manifest.write_text(json.dumps(yd_names, ensure_ascii=False), "utf-8")
+                names = sorted(p.name for p in dest.glob("*.jpg"))
                 if names:
                     result[iid] = names
             else:

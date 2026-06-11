@@ -76,11 +76,11 @@ def resync_views(slug: str):
     """Часовой ресинк видов: зеркалит ЯД и пересобирает фиды (без перерисовки планировок)."""
     proj = PROJECTS.get(slug)
     if not proj or not proj.get("views_sources"):
-        return
+        return {"lots": 0, "lots_with_views": 0, "view_files": 0}
     d = project_dirs(slug)
     cian = d["feeds"] / "original.xml"
     if not cian.exists():
-        return
+        return {"lots": 0, "lots_with_views": 0, "view_files": 0}
     with _lock:
         raw = cian.read_bytes()
         lots = parse_feed(raw)
@@ -93,6 +93,39 @@ def resync_views(slug: str):
             coords = coords_from_avito(av.read_bytes()) if av.exists() else {}
             now = time.strftime("%Y-%m-%dT%H:%M:%S+03:00")
             assemble_yandex_feed(slug, lots, coords, d["feeds"] / "yandex.xml", now)
+        vdir = d["views"]
+        lots_with_views = sum(1 for sub in vdir.iterdir()
+                              if sub.is_dir() and any(sub.glob("*.jpg"))) if vdir.exists() else 0
+        view_files = sum(1 for _ in vdir.rglob("*.jpg")) if vdir.exists() else 0
+        return {"lots": len(lots), "lots_with_views": lots_with_views, "view_files": view_files}
+
+
+# Фоновый ресинк видов: обход папок Я.Диска занимает >120с (рекурсивный листинг),
+# что упирается в таймаут nginx. Поэтому запускаем в потоке, а админка опрашивает
+# статус и показывает попап с итогами по завершении.
+_view_sync_status: dict = {}
+
+
+def resync_views_async(slug: str) -> dict:
+    """Запустить ресинк видов в фоне (если уже не идёт). Возвращает текущий статус."""
+    st = _view_sync_status.get(slug)
+    if st and st.get("state") == "running":
+        return st
+    _view_sync_status[slug] = {"state": "running"}
+
+    def _run():
+        try:
+            r = resync_views(slug) or {}
+            _view_sync_status[slug] = {"state": "done", **r}
+        except Exception as e:
+            _view_sync_status[slug] = {"state": "error", "error": str(e)}
+
+    threading.Thread(target=_run, daemon=True).start()
+    return _view_sync_status[slug]
+
+
+def view_sync_status(slug: str) -> dict:
+    return _view_sync_status.get(slug) or {"state": "idle"}
 
 
 def refresh_project(slug: str) -> dict:

@@ -20,7 +20,7 @@ import xml.etree.ElementTree as ET
 from functools import wraps
 from pathlib import Path
 
-from flask import (Blueprint, abort, flash, redirect, render_template_string,
+from flask import (Blueprint, abort, flash, jsonify, redirect, render_template_string,
                    request, session, url_for)
 from werkzeug.utils import secure_filename
 
@@ -360,8 +360,11 @@ def views_page(slug: str):
         abort(404)
     rows = _views_coverage(slug)
     have = sum(1 for r in rows if r["n"] > 0)
+    from .server import view_sync_status
+    syncing = request.args.get("started") == "1" or view_sync_status(slug).get("state") == "running"
     return render_template_string(_VIEWS_HTML, slug=slug, name=PROJECTS[slug]["name"],
-                                  rows=rows, have=have, total=len(rows), base=PUBLIC_BASE_URL)
+                                  rows=rows, have=have, total=len(rows), base=PUBLIC_BASE_URL,
+                                  syncing=syncing)
 
 
 @admin_bp.route("/<slug>/views/resync", methods=["POST"])
@@ -369,13 +372,20 @@ def views_page(slug: str):
 def views_resync(slug: str):
     if slug not in PROJECTS:
         abort(404)
-    from .server import resync_views
-    try:
-        resync_views(slug)
-        flash("Виды синхронизированы с Я.Диска (удаления/добавления подхвачены).")
-    except Exception as e:
-        flash(f"Ошибка синка: {e}")
-    return redirect(url_for("admin.views_page", slug=slug))
+    # Обход Я.Диска долгий (>120с) → запускаем в фоне, страница опрашивает статус
+    # и показывает попап с итогами по завершении (см. JS в _VIEWS_HTML).
+    from .server import resync_views_async
+    resync_views_async(slug)
+    return redirect(url_for("admin.views_page", slug=slug, started=1))
+
+
+@admin_bp.route("/<slug>/views/sync_status")
+@login_required
+def views_sync_status(slug: str):
+    if slug not in PROJECTS:
+        abort(404)
+    from .server import view_sync_status
+    return jsonify(view_sync_status(slug))
 
 
 @admin_bp.route("/<slug>/views/<lot>/upload", methods=["POST"])
@@ -541,8 +551,13 @@ def refresh(slug: str):
             png.unlink()
     try:
         res = refresh_project(slug)
-        flash(f"Фид обновлён: {res.get('enriched_ok', 0)} планировок, "
-              f"объявлений в Авито — {_avito_check(slug)['ads']}.")
+        vdir = project_dirs(slug)["views"]
+        views_n = sum(1 for sub in vdir.iterdir()
+                      if sub.is_dir() and any(sub.glob("*.jpg"))) if vdir.exists() else 0
+        flash(f"Фид обновлён. Лотов: {res.get('lots_total', '?')}, "
+              f"планировок обогащено: {res.get('enriched_ok', 0)}, "
+              f"лотов с видами из окон: {views_n}, "
+              f"объявлений в Авито: {_avito_check(slug)['ads']}.")
     except Exception as e:
         flash(f"Ошибка обновления: {e}")
     return redirect(url_for("admin.project", slug=slug))
@@ -552,24 +567,28 @@ def refresh(slug: str):
 
 _CSS = """
 <style>
- body{font-family:system-ui,Segoe UI,Roboto,sans-serif;max-width:1000px;margin:0 auto;padding:20px;color:#1c2430;background:#f4f6f9}
+ body{font-family:system-ui,Segoe UI,Roboto,sans-serif;max-width:1480px;margin:0 auto;padding:24px;color:#1c2430;background:#f4f6f9}
  a{color:#2563eb;text-decoration:none} a:hover{text-decoration:underline}
- h1{font-size:22px;margin:0 0 16px} h2{font-size:17px;margin:22px 0 10px}
- .card{background:#fff;border-radius:10px;padding:16px 18px;box-shadow:0 1px 3px rgba(0,0,0,.07);margin-bottom:16px}
- .btn{display:inline-block;background:#2563eb;color:#fff;border:0;border-radius:7px;padding:8px 14px;cursor:pointer;font-size:14px}
+ h1{font-size:26px;margin:0 0 18px} h2{font-size:19px;margin:24px 0 12px}
+ .card{background:#fff;border-radius:10px;padding:18px 22px;box-shadow:0 1px 3px rgba(0,0,0,.07);margin-bottom:18px}
+ .btn{display:inline-block;background:#2563eb;color:#fff;border:0;border-radius:7px;padding:9px 16px;cursor:pointer;font-size:15px}
  .btn.gray{background:#6b7280}.btn.red{background:#dc2626}.btn.green{background:#16a34a}
  label{display:block;font-size:13px;color:#555;margin:10px 0 4px}
- input[type=text],select,textarea{width:100%;box-sizing:border-box;padding:8px;border:1px solid #cbd5e1;border-radius:6px;font-size:14px}
- table{border-collapse:collapse;width:100%}.td td,td,th{padding:8px;border-bottom:1px solid #eef1f5;text-align:left;font-size:14px}
+ input[type=text],select,textarea{width:100%;box-sizing:border-box;padding:9px;border:1px solid #cbd5e1;border-radius:6px;font-size:15px}
+ table{border-collapse:collapse;width:100%}.td td,td,th{padding:10px;border-bottom:1px solid #eef1f5;text-align:left;font-size:15px}
  .flash{background:#fef9c3;border:1px solid #fde047;border-radius:8px;padding:10px 14px;margin-bottom:14px}
  .pill{display:inline-block;background:#e8f0fe;color:#1a56db;border-radius:20px;padding:2px 10px;font-size:12px}
  .ok{color:#16a34a;font-weight:600}.bad{color:#dc2626;font-weight:600}
- .ph{display:inline-block;margin:4px;vertical-align:top;text-align:center;font-size:11px;color:#666}
- .ph img{width:120px;height:90px;object-fit:cover;border-radius:6px;border:1px solid #ddd;display:block}
- .row{display:flex;gap:16px;flex-wrap:wrap}.col{flex:1;min-width:240px}
+ .ph{display:inline-block;margin:5px;vertical-align:top;text-align:center;font-size:12px;color:#666}
+ .ph img{width:172px;height:129px;object-fit:cover;border-radius:6px;border:1px solid #ddd;display:block}
+ .row{display:flex;gap:18px;flex-wrap:wrap}.col{flex:1;min-width:300px}
  .muted{color:#94a3b8;font-size:13px}
- .strip{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px}
- .tile{position:relative;width:140px;height:104px;border-radius:8px;overflow:hidden;border:1px solid #d7dee7;background:#fff;cursor:grab}
+ .strip{display:flex;flex-wrap:wrap;gap:12px;margin-top:12px}
+ .modal-bg{position:fixed;inset:0;background:rgba(15,23,42,.5);display:flex;align-items:center;justify-content:center;z-index:50}
+ .modal{background:#fff;border-radius:16px;padding:26px 30px;max-width:480px;box-shadow:0 16px 48px rgba(0,0,0,.28);text-align:center}
+ .modal-h{font-size:21px;font-weight:700;margin-bottom:12px}
+ .modal-b{font-size:16px;color:#334155;line-height:1.55;margin-bottom:20px}
+ .tile{position:relative;width:200px;height:150px;border-radius:8px;overflow:hidden;border:1px solid #d7dee7;background:#fff;cursor:grab}
  .tile img{width:100%;height:100%;object-fit:cover;display:block}
  .tile .del{position:absolute;top:4px;right:4px;width:22px;height:22px;border:0;border-radius:50%;background:rgba(220,38,38,.92);color:#fff;font-size:13px;line-height:22px;cursor:pointer;padding:0}
  .tile .num{position:absolute;left:4px;bottom:4px;background:rgba(0,0,0,.6);color:#fff;font-size:11px;border-radius:4px;padding:1px 6px}
@@ -581,7 +600,18 @@ _CSS = """
 </style>
 """
 
-_FLASH = "{% with m=get_flashed_messages() %}{% if m %}<div class=flash>{{m|join('<br>')|safe}}</div>{% endif %}{% endwith %}"
+_FLASH = """{% with m=get_flashed_messages() %}{% if m %}
+{% set _j = (m|join(' '))|lower %}
+{% set _err = ('ошибк' in _j) or ('неверн' in _j) or ('не сохранено' in _j) or ('не удалось' in _j) or ('не задана' in _j) %}
+<div class="modal-bg" id="popup" onclick="if(event.target===this)this.remove()">
+ <div class="modal">
+  <div class="modal-h" style="color:{{'#dc2626' if _err else '#16a34a'}}">{{'⚠ Внимание' if _err else '✓ Готово'}}</div>
+  <div class="modal-b">{{m|join('<br>')|safe}}</div>
+  <button class="btn{{' red' if _err else ' green'}}" onclick="document.getElementById('popup').remove()">OK</button>
+ </div>
+</div>
+<script>document.addEventListener('keydown',function(e){if(e.key==='Escape'){var p=document.getElementById('popup');if(p)p.remove();}});</script>
+{% endif %}{% endwith %}"""
 
 _LOGIN_HTML = _CSS + """<title>Вход — фиды</title><h1>Панель управления фидами</h1>""" + _FLASH + """
 <div class=card style="max-width:360px">
@@ -619,8 +649,44 @@ _VIEWS_HTML = _CSS + """<title>Виды — {{name}}</title>
 <h1>Виды из окон — {{name}}</h1>""" + _FLASH + """
 <div class=card>
  <p>Лотов с видами: <b class=ok>{{have}}</b> из {{total}}. Без видов — <b class=bad>{{total-have}}</b> (вверху).
-   <form method=post action="{{url_for('admin.views_resync',slug=slug)}}" style="display:inline;margin-left:10px">
-     <button class="btn green">↻ Синхронизировать с Я.Диска</button></form></p>
+   <form method=post action="{{url_for('admin.views_resync',slug=slug)}}" style="display:inline;margin-left:10px" id=syncform>
+     <button class="btn green" id=syncbtn>↻ Синхронизировать с Я.Диска</button></form>
+   <span id=syncwait style="display:none;margin-left:10px;color:#6b7280">⏳ Идёт синхронизация с Я.Диском… (1–2 мин, можно не ждать)</span></p>
+<script>
+(function(){
+ var syncing = {{ 'true' if syncing else 'false' }};
+ function popup(ok, text){
+   var bg=document.createElement('div'); bg.className='modal-bg';
+   bg.onclick=function(e){if(e.target===bg)bg.remove();};
+   bg.innerHTML='<div class="modal"><div class="modal-h" style="color:'+(ok?'#16a34a':'#dc2626')+'">'+
+     (ok?'✓ Готово':'⚠ Внимание')+'</div><div class="modal-b">'+text+'</div>'+
+     '<button class="btn '+(ok?'green':'red')+'">OK</button></div>';
+   bg.querySelector('button').onclick=function(){bg.remove();};
+   document.body.appendChild(bg);
+ }
+ if(syncing){
+   var b=document.getElementById('syncbtn'); if(b){b.disabled=true;}
+   document.getElementById('syncwait').style.display='inline';
+   var poll=setInterval(function(){
+     fetch('{{url_for("admin.views_sync_status",slug=slug)}}',{credentials:'same-origin'})
+      .then(function(r){return r.json();})
+      .then(function(s){
+        if(s.state==='done'){
+          clearInterval(poll);
+          popup(true,'Синхронизация с Я.Диском завершена.<br>Лотов в фиде: <b>'+(s.lots)+
+            '</b><br>Из них с видами из окон: <b>'+(s.lots_with_views)+
+            '</b><br>Всего фото видов: <b>'+(s.view_files)+'</b>');
+          document.getElementById('syncwait').style.display='none';
+        } else if(s.state==='error'){
+          clearInterval(poll);
+          popup(false,'Ошибка синхронизации: '+(s.error||''));
+          document.getElementById('syncwait').style.display='none';
+        }
+      }).catch(function(){});
+   },3000);
+ }
+})();
+</script>
  <p class=muted>Виды зеркалятся из Я.Диска (удаления в ЯД подхватываются; авто-синк раз в час). Можно править вручную: <b>✕</b> — удалить, <b>＋</b> — загрузить (ручные сохраняются как «u…», синк с ЯД их не трогает).</p>
  <table>
   <tr><th>Лот · Корпус · Этаж · Тип · Площадь</th><th>Виды (✕ удалить, ＋ добавить)</th></tr>
@@ -631,14 +697,14 @@ _VIEWS_HTML = _CSS + """<title>Виды — {{name}}</title>
    <td>
      {% for fn in r.files %}
      <span style="position:relative;display:inline-block;margin:2px">
-       <img src="{{base}}/views/{{slug}}/{{r.id}}/{{fn}}" style="width:72px;height:52px;object-fit:cover;border-radius:4px;border:1px solid #ddd">
+       <img src="{{base}}/views/{{slug}}/{{r.id}}/{{fn}}" style="width:132px;height:96px;object-fit:cover;border-radius:6px;border:1px solid #ddd">
        <form method=post action="{{url_for('admin.views_delete',slug=slug,lot=r.id)}}" style="position:absolute;top:2px;right:2px;margin:0">
          <input type=hidden name=name value="{{fn}}">
          <button class=del onclick="return confirm('Удалить {{fn}}?')">✕</button></form>
      </span>
      {% endfor %}
      <form method=post action="{{url_for('admin.views_upload',slug=slug,lot=r.id)}}" enctype=multipart/form-data style="display:inline">
-       <input type=file name=photos accept="image/*" multiple style="width:140px;font-size:11px">
+       <input type=file name=photos accept="image/*" multiple style="width:200px;font-size:13px">
        <button class=btn style="padding:5px 9px">＋</button></form>
    </td>
   </tr>

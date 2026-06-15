@@ -19,6 +19,10 @@ from .parser import FeedLot
 # Обратный маппинг lot.rooms → код FlatRoomsCount ЦИАН (см. parser.ROOMS_MAP)
 _ROOMS_TO_CIAN = {0: 9, -1: 7, 6: 10}
 
+# URL планов/поэтажек ProfitBase — их выкидываем из фида (свою планировку даём сами).
+# Те же маркеры, что в assembler_avito._PLAN_URL_MARKERS.
+_PLAN_URL_MARKERS = ("/uploads/layout/", "/uploads/preset/", "/uploads/plan")
+
 
 def _public_url_for(slug: str, internal_id: str) -> str:
     # Версия в ПУТИ (не query) — Яндекс.Недвижимость отвергает картинки с ?v=, ждёт .png на конце
@@ -62,6 +66,12 @@ def assemble_feed(slug: str, original_xml: bytes,
                         full = ET.SubElement(p, "FullUrl")
                     full.text = new_url
                     break
+
+            # 2b) Выкидываем поэтажки/планы ProfitBase (/uploads/layout|preset|plan).
+            # Наш PNG уже подставлен выше (он на нашем домене, под маркеры не попадает).
+            for p in list(photos.findall("PhotoSchema")):
+                if any(m in (p.findtext("FullUrl") or "") for m in _PLAN_URL_MARKERS):
+                    photos.remove(p)
 
         # 3) Виды из окон лота — добавляем доп. PhotoSchema
         view_urls = lot_view_urls(slug, iid)

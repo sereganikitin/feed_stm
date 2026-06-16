@@ -126,24 +126,39 @@ def list_public_images(public_key: str, path: str) -> list[dict]:
 
 
 def sync_public_folder(public_key: str, path: str, dest_dir: Path,
-                       max_side: int = 2560, quality: int = 86) -> list[Path]:
+                       max_side: int = 2560, quality: int = 86,
+                       mirror: bool = False) -> list[Path]:
     """Скачать (идемпотентно) все картинки публичной папки в dest_dir как NN.jpg.
 
     Уже скачанные файлы пропускаются по имени. Возвращает отсортированный список путей.
     Если ЯД недоступен — пробрасывает исключение (вызов оборачивать в try в refresh).
+
+    mirror=True — режим зеркала: файлы, которые БЫЛИ скачаны из ЯД, но в ЯД больше
+    не существуют, удаляются локально. Манифест _src.json хранит имена из ЯД, поэтому
+    файлы, добавленные иначе (ручная загрузка), не трогаются.
     """
     dest_dir.mkdir(parents=True, exist_ok=True)
     saved: list[Path] = []
+    yd_names: list[str] = []
     for it in list_public_images(public_key, path):
         out = dest_dir / (Path(it["name"]).stem + ".jpg")
-        if out.exists():
-            saved.append(out)
-            continue
-        href = _api_get("/download", {"public_key": public_key, "path": it["path"]})["href"]
-        req = urllib.request.Request(href, headers={"User-Agent": "feed-enricher"})
-        with _open(req, timeout=180) as r:
-            raw = r.read()
-        save_resized_jpeg(raw, out, max_side=max_side, quality=quality)
+        yd_names.append(out.name)
+        if not out.exists():
+            href = _api_get("/download", {"public_key": public_key, "path": it["path"]})["href"]
+            req = urllib.request.Request(href, headers={"User-Agent": "feed-enricher"})
+            with _open(req, timeout=180) as r:
+                raw = r.read()
+            save_resized_jpeg(raw, out, max_side=max_side, quality=quality)
+            time.sleep(0.4)   # не долбим API Яндекс.Диска — иначе 429
         saved.append(out)
-        time.sleep(0.4)   # не долбим API Яндекс.Диска — иначе 429
-    return sorted(saved)
+    if mirror:
+        manifest = dest_dir / "_src.json"
+        try:
+            old = set(json.loads(manifest.read_text("utf-8")))
+        except Exception:
+            old = set()
+        cur = set(yd_names)
+        for nm in old - cur:                      # были из ЯД, теперь удалены в ЯД
+            (dest_dir / nm).unlink(missing_ok=True)
+        manifest.write_text(json.dumps(sorted(cur), ensure_ascii=False), "utf-8")
+    return sorted(dest_dir.glob("*.jpg"))

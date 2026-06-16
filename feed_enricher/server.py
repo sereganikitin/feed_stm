@@ -72,10 +72,23 @@ def _sync_views(slug, dirs, lots):
             print(f"[{slug}] views sync failed ({src.get('mode')}): {e}")
 
 
+def _sync_cian_photos(slug, dirs):
+    """Зеркалирование общего набора фото карточки ЦИАН из папки Я.Диска."""
+    cfg = PROJECTS[slug].get("cian_extra_photos")
+    if not cfg:
+        return
+    try:
+        n = len(sync_public_folder(cfg["yadisk_public_key"], cfg["yadisk_path"],
+                                   dirs["extra_cian"], mirror=True))
+        print(f"[{slug}] cian photos synced: {n}")
+    except Exception as e:
+        print(f"[{slug}] cian yadisk sync failed: {e}")
+
+
 def resync_views(slug: str):
-    """Часовой ресинк видов: зеркалит ЯД и пересобирает фиды (без перерисовки планировок)."""
+    """Часовой ресинк: зеркалит виды И фото ЦИАН из ЯД, пересобирает фиды (без перерисовки планировок)."""
     proj = PROJECTS.get(slug)
-    if not proj or not proj.get("views_sources"):
+    if not proj or not (proj.get("views_sources") or proj.get("cian_extra_photos")):
         return {"lots": 0, "lots_with_views": 0, "view_files": 0}
     d = project_dirs(slug)
     cian = d["feeds"] / "original.xml"
@@ -85,6 +98,7 @@ def resync_views(slug: str):
         raw = cian.read_bytes()
         lots = parse_feed(raw)
         _sync_views(slug, d, lots)
+        _sync_cian_photos(slug, d)
         assemble_feed(slug, raw, lots, d["feeds"] / "feed.xml")
         av = d["feeds"] / "original_avito.xml"
         if proj.get("pb_avito_feed_url") and av.exists():
@@ -148,6 +162,8 @@ def refresh_project(slug: str) -> dict:
                 print(f"[{slug}] enrich error {lot.internal_id}: {e}")
         # Виды из окон по лотам — несколько источников Я.Диска (зеркалирование)
         _sync_views(slug, dirs, lots)
+        # Фото карточки ЦИАН с Я.Диска (зеркало: добавления/удаления в ЯД подхватываются)
+        _sync_cian_photos(slug, dirs)
 
         out = dirs["feeds"] / "feed.xml"
         assemble_feed(slug, original, lots, out)
@@ -233,11 +249,12 @@ def _refresh_loop():
 
 
 def _views_loop():
-    """Раз в час: зеркалим виды из Я.Диска и пересобираем фиды (удаления подхватываются)."""
+    """Раз в час: зеркалим виды и фото карточки ЦИАН из Я.Диска и пересобираем фиды
+    (добавления/удаления в ЯД подхватываются)."""
     while True:
         time.sleep(3600)
         for slug in PROJECTS:
-            if PROJECTS[slug].get("views_sources"):
+            if PROJECTS[slug].get("views_sources") or PROJECTS[slug].get("cian_extra_photos"):
                 try:
                     resync_views(slug)
                     print(f"[views-hourly] {slug} ok")
@@ -389,6 +406,17 @@ def serve_extra_yandex(slug: str, name: str):
     return send_file(p, mimetype="image/jpeg")
 
 
+@app.route("/extra_cian/<slug>/<name>")
+def serve_extra_cian(slug: str, name: str):
+    """Наши фото для карточки ЦИАН (зеркало папки Я.Диска)."""
+    if slug not in PROJECTS or "/" in name or "\\" in name:
+        abort(404)
+    p = project_dirs(slug)["extra_cian"] / name
+    if not p.exists():
+        abort(404)
+    return send_file(p, mimetype="image/jpeg")
+
+
 # Версионные URL (cache-busting): версия — отдельным сегментом пути, чтобы URL
 # заканчивался на .png/.jpg (Яндекс.Недвижимость отвергает ?v= у картинок).
 @app.route("/enriched/<slug>/<ver>/<name>")
@@ -404,6 +432,11 @@ def serve_extra_v(slug: str, ver: str, name: str):
 @app.route("/extra_yandex/<slug>/<ver>/<name>")
 def serve_extra_yandex_v(slug: str, ver: str, name: str):
     return serve_extra_yandex(slug, name)
+
+
+@app.route("/extra_cian/<slug>/<ver>/<name>")
+def serve_extra_cian_v(slug: str, ver: str, name: str):
+    return serve_extra_cian(slug, name)
 
 
 @app.route("/views/<slug>/<lot>/<name>")

@@ -34,12 +34,15 @@ from .enricher import enrich_lot
 from .parser import parse_feed
 from . import commercial as comm
 
-# Два набора фото: Авито и Яндекс — общий код, разные каталоги/настройки/фид
+# Наборы фото карточки: Авито, Яндекс, ЦИАН — общий код, разные каталоги/настройки/фид.
+# mirror=True (ЦИАН) — синк зеркалит ЯД (удаления подхватываются).
 _KINDS = {
     "avito":  {"dir": "extra",        "order_key": "extra_photo_order",
-               "cfg_key": "avito_extra_photos",  "url": "extra",        "title": "Авито"},
+               "cfg_key": "avito_extra_photos",  "url": "extra",        "title": "Авито", "mirror": False},
     "yandex": {"dir": "extra_yandex", "order_key": "extra_photo_order_yandex",
-               "cfg_key": "yandex_extra_photos", "url": "extra_yandex", "title": "Яндекс.Недвижимость"},
+               "cfg_key": "yandex_extra_photos", "url": "extra_yandex", "title": "Яндекс.Недвижимость", "mirror": False},
+    "cian":   {"dir": "extra_cian",   "order_key": "extra_photo_order_cian",
+               "cfg_key": "cian_extra_photos",   "url": "extra_cian",   "title": "ЦИАН", "mirror": True},
 }
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
@@ -138,8 +141,25 @@ def _rebuild_yandex(slug: str) -> None:
     assemble_yandex_feed(slug, lots, coords, d["feeds"] / "yandex.xml", now)
 
 
+def _rebuild_cian(slug: str) -> None:
+    """Пересобрать ЦИАН-фид после правок фото — из кэшированного исходника."""
+    d = project_dirs(slug)
+    cian = d["feeds"] / "original.xml"
+    if not cian.exists():
+        from .server import refresh_project
+        refresh_project(slug)
+        return
+    raw = cian.read_bytes()
+    assemble_feed(slug, raw, parse_feed(raw), d["feeds"] / "feed.xml")
+
+
 def _rebuild(slug: str, kind: str) -> None:
-    _rebuild_yandex(slug) if kind == "yandex" else _rebuild_avito(slug)
+    if kind == "yandex":
+        _rebuild_yandex(slug)
+    elif kind == "cian":
+        _rebuild_cian(slug)
+    else:
+        _rebuild_avito(slug)
 
 
 def _rebuild_all_feeds(slug: str) -> None:
@@ -259,6 +279,7 @@ def dashboard():
             "yandex": _count(d["feeds"] / "yandex.xml", "offer"),
             "photos": len(_photos(slug, "avito")),
             "photos_y": len(_photos(slug, "yandex")),
+            "photos_c": len(_photos(slug, "cian")),
             "views": _views_count(slug),
             "status": st.get(slug, {}),
         })
@@ -272,12 +293,18 @@ def project(slug: str):
         abort(404)
     proj = get_project(slug)
     check = _avito_check(slug)
-    galleries = [{
-        "kind": kk, "title": v["title"], "url": v["url"],
-        "photos": _photos(slug, kk),
-        "feed": f"{PUBLIC_BASE_URL}/feed/{slug}-{kk}.xml",
-        "has_yd": bool((PROJECTS[slug].get(v["cfg_key"]) or {}).get("yadisk_public_key")),
-    } for kk, v in _KINDS.items()]
+    galleries = []
+    for kk, v in _KINDS.items():
+        has_yd = bool((PROJECTS[slug].get(v["cfg_key"]) or {}).get("yadisk_public_key"))
+        if kk == "cian" and not has_yd:
+            continue  # ЦИАН-набор показываем только если задана папка ЯД
+        feed = f"{PUBLIC_BASE_URL}/feed/{slug}.xml" if kk == "cian" \
+            else f"{PUBLIC_BASE_URL}/feed/{slug}-{kk}.xml"
+        galleries.append({
+            "kind": kk, "title": v["title"], "url": v["url"],
+            "photos": _photos(slug, kk), "feed": feed,
+            "has_yd": has_yd, "mirror": v.get("mirror", False),
+        })
     return render_template_string(
         _PROJ_HTML, slug=slug, proj=proj, base=PUBLIC_BASE_URL,
         galleries=galleries, plan=check.get("plan"), check=check,
@@ -531,7 +558,7 @@ def sync_yd(slug: str, kind: str):
         return redirect(url_for("admin.project", slug=slug))
     try:
         n = len(sync_public_folder(cfg["yadisk_public_key"], cfg["yadisk_path"],
-                                   project_dirs(slug)[k["dir"]]))
+                                   project_dirs(slug)[k["dir"]], mirror=k.get("mirror", False)))
         _rebuild(slug, kind)
         flash(f"С Яндекс.Диска синхронизировано ({k['title']}): {n}.")
     except Exception as e:
@@ -626,14 +653,14 @@ _DASH_HTML = _CSS + """<title>Фиды</title>
 <h1>Фиды квартир — панель</h1>""" + _FLASH + """
 <div class=card>
  <table>
-  <tr><th>Проект</th><th>ЦИАН</th><th>Авито</th><th>Яндекс</th><th>Фото А/Я</th><th>Виды</th><th>Обновлено</th><th></th></tr>
+  <tr><th>Проект</th><th>ЦИАН</th><th>Авито</th><th>Яндекс</th><th>Фото А/Я/Ц</th><th>Виды</th><th>Обновлено</th><th></th></tr>
   {% for r in rows %}
   <tr>
    <td><b>{{r.name}}</b><div class=muted>{{r.slug}}</div></td>
    <td>{{r.cian}} <div class=muted><a href="{{base}}/feed/{{r.slug}}.xml" target=_blank>xml</a></div></td>
    <td>{{r.avito}} <div class=muted><a href="{{base}}/feed/{{r.slug}}-avito.xml" target=_blank>xml</a></div></td>
    <td>{{r.yandex}} <div class=muted><a href="{{base}}/feed/{{r.slug}}-yandex.xml" target=_blank>xml</a></div></td>
-   <td>{{r.photos}} / {{r.photos_y}}</td>
+   <td>{{r.photos}} / {{r.photos_y}} / {{r.photos_c}}</td>
    <td>{{r.views}} <div class=muted><a href="{{url_for('admin.views_page',slug=r.slug)}}">список</a></div></td>
    <td class=muted>{% if r.status.get('ts') %}{{r.status.ts}}<br>планировок: {{r.status.get('enriched_ok','?')}}{% else %}—{% endif %}</td>
    <td><a class=btn href="{{url_for('admin.project',slug=r.slug)}}">Открыть</a></td>
@@ -814,6 +841,7 @@ _PROJ_HTML = _CSS + """<title>{{proj.name}}</title>
  <h2 style="margin-top:0">Фото — {{g.title}} ({{g.photos|length}})</h2>
  <p class=muted>Перетаскивайте мышкой — порядок · <b>✕</b> — удалить · плитка <b>＋</b> — загрузить. Применяется сразу.
    · <a href="{{g.feed}}" target=_blank>открыть XML</a></p>
+ {% if g.mirror %}<p class=muted>Это зеркало папки Я.Диска: набор синхронизируется раз в час (добавления и удаления в ЯД подхватываются) и по кнопке ниже. Карточка ЦИАН: <b>планировка → эти фото → виды из окон</b>. Удаление здесь временно — если фото осталось в ЯД, синк вернёт его (убирайте в самой папке Я.Диска).</p>{% endif %}
  <div class=strip data-kind="{{g.kind}}"
       data-upload="{{url_for('admin.upload_photos',slug=slug,kind=g.kind)}}"
       data-delete="{{url_for('admin.delete_photo',slug=slug,kind=g.kind)}}"

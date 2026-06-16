@@ -40,6 +40,14 @@ PROJECTS = {
             # только наша обогащённая планировка + наши фото. (Планы убирает cover-логика.)
             "replace_markers":   ["/uploads/house/", "/uploads/facade/", "/uploads/building_image/"],
         },
+        # Фото для карточки ЦИАН (общий набор с Я.Диска). Карточка ЦИАН пересобирается
+        # целиком: обложка = наша планировка, затем эти фото, затем виды из окон лота.
+        # Фото ProfitBase в ЦИАН-фид не попадают. Зеркалирование (добавление/удаление в ЯД
+        # подхватывается), синк раз в час + кнопка в админке.
+        "cian_extra_photos": {
+            "yadisk_public_key": "https://disk.360.yandex.ru/d/6nA7DAS6HGlR1g",
+            "yadisk_path":       "/Для карточки лота Циан",
+        },
         # Вариант B (fallback): если pb_avito_feed_url пуст — конвертируем из ЦИАН-фида сами.
         # Status (Квартира/Апартаменты) берётся из IsApartments автоматически.
         "avito_market_type":        "Новостройка",  # Новостройка | Вторичка
@@ -136,6 +144,12 @@ PROJECTS = {
             "yadisk_path":       "/",
             "replace_markers":   ["/uploads/house/", "/uploads/facade/", "/uploads/building_image/"],
         },
+        # Фото для карточки ЦИАН (см. zorge9): карточка собирается заново —
+        # обложка (наша планировка) → эти фото → виды. Фото ProfitBase не попадают.
+        "cian_extra_photos": {
+            "yadisk_public_key": "https://disk.360.yandex.ru/d/VUz9nj7AoKdu9g",
+            "yadisk_path":       "/",
+        },
         "sales_agent": {"organization": "St MICHAEL", "category": "застройщик", "url": "https://stmichael.ru"},
         # ─── Раскладка шаблона Б37 (1150×1040) ───
         # Слева — брендинг + фото дома, справа — большая белая зона:
@@ -181,6 +195,7 @@ def project_dirs(slug: str) -> dict:
         "feeds":     base / "feeds",
         "extra":         base / "extra",          # фото для карточки Авито
         "extra_yandex":  base / "extra_yandex",   # фото для карточки Яндекс.Недвижимости
+        "extra_cian":    base / "extra_cian",     # фото для карточки ЦИАН (зеркало папки ЯД)
         "views":         base / "views",          # виды из окон по лотам: views/<id>/*.jpg
     }
     for d in dirs.values():
@@ -205,6 +220,7 @@ EDITABLE_KEYS = {
     "avito_replace_building_image", # bool — заменять ли building_image нашими фото
     "extra_photo_order",            # list[str] — порядок файлов в /extra (Авито)
     "extra_photo_order_yandex",     # list[str] — порядок файлов в /extra_yandex
+    "extra_photo_order_cian",       # list[str] — порядок файлов в /extra_cian (ЦИАН)
     "description_suffix",           # str — приписка к каждому описанию
     "installment",                  # dict — формула рассрочки (где есть)
     "price_discount_pct",           # float — скидка к цене из фида, % (0 = не трогать)
@@ -269,6 +285,18 @@ def lot_view_urls(slug: str, internal_id: str) -> list:
         return []
     return [f"{PUBLIC_BASE_URL}/views/{slug}/{internal_id}/{file_ver(f)}/{f.name}"
             for f in sorted(vdir.glob("*.jpg"))]
+
+
+def cian_extra_urls(slug: str) -> list:
+    """URL общего набора фото карточки ЦИАН (cache/<slug>/extra_cian/*.jpg)
+    в порядке из настройки extra_photo_order_cian (новые — в конец), с версией в пути."""
+    d = CACHE_DIR / slug / "extra_cian"
+    if not d.exists():
+        return []
+    files = {p.name for p in d.glob("*.jpg")}
+    order = [n for n in (get_project(slug).get("extra_photo_order_cian") or []) if n in files]
+    names = order + sorted(files - set(order))
+    return [f"{PUBLIC_BASE_URL}/extra_cian/{slug}/{file_ver(d / n)}/{n}" for n in names]
 
 
 def get_project(slug: str) -> dict:

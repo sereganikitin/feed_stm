@@ -245,6 +245,11 @@ def _refresh_loop():
             print(f"[auto-refresh-comm] {comm.refresh_all_commercial()}")
         except Exception as e:
             print(f"[auto-refresh-comm] error: {e}")
+        try:
+            from . import comm_cian_rent
+            print(f"[auto-refresh-comm-rent] {comm_cian_rent.refresh()}")
+        except Exception as e:
+            print(f"[auto-refresh-comm-rent] error: {e}")
         time.sleep(REFRESH_INTERVAL_HOURS * 3600)
 
 
@@ -482,6 +487,27 @@ def serve_comm_img(slug: str, kind: str, name: str):
 @app.route("/commercial/<slug>/<kind>/<ver>/<name>")
 def serve_comm_img_v(slug: str, kind: str, ver: str, name: str):
     return serve_comm_img(slug, kind, name)
+
+
+@app.route("/feed/comm/b37-rent-cian.xml")
+def serve_comm_rent_cian():
+    """Коммерция аренда Берзарина 37 — ЦИАН (нативный экспорт + цены из API)."""
+    from . import comm_cian_rent
+    p = comm_cian_rent.OUT
+    if not p.exists():
+        try:
+            comm_cian_rent.refresh()
+        except Exception:
+            pass
+    if not p.exists():
+        abort(503)
+    return send_file(p, mimetype="application/xml")
+
+
+@app.route("/refresh-comm-rent", methods=["POST"])
+def manual_refresh_comm_rent():
+    from . import comm_cian_rent
+    return jsonify(comm_cian_rent.refresh())
 
 
 @app.route("/refresh-commercial", methods=["POST"])

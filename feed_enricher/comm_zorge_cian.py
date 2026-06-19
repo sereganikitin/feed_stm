@@ -11,21 +11,30 @@
 import os
 import json
 import time
+import types
 import urllib.request
 import urllib.error
 import xml.etree.ElementTree as ET
 
-from .config import CACHE_DIR
+from .config import (CACHE_DIR, PUBLIC_BASE_URL, file_ver,
+                     COMMERCIAL_TEMPLATE_ZORGE_URL, COMMERCIAL_TEMPLATE_ZORGE_EXT,
+                     COMMERCIAL_LAYOUT_ZORGE)
+from .enricher import enrich_commercial
 
-PB_API_BASE = "https://pb7828.profitbase.ru/api/v4/json"
-RENT_FIELD  = "pbcf_6218cf5652a5d"   # «Стоимость аренды, руб./мес.»
-NAZ_FIELD   = "pbcf_61e947e1daaa1"   # «Назначение помещения»
+PB_API_BASE   = "https://pb7828.profitbase.ru/api/v4/json"
+RENT_FIELD    = "pbcf_6218cf5652a5d"   # «Стоимость аренды, руб./мес.»
+NAZ_FIELD     = "pbcf_61e947e1daaa1"   # «Назначение помещения»
+CEILING_FIELD = "pbcf_6218cf455c37f"   # «Высота потолка», м
+POWER_FIELD   = "pbcf_6218cf2f8b6e2"   # «Подводимая мощность, кВт»
 ADDRESS     = "Москва, ул. Зорге, дом 9Ак1"
 PHONE       = "+74952924193"
 # Срок сдачи: дом сдан (3 квартал 2023). Quarter у ЦИАН — словом.
 DEADLINE    = {"quarter": "third", "year": "2023", "complete": "true"}
-OUT_DIR = CACHE_DIR / "comm_zorge"
-OUT = OUT_DIR / "cian.xml"
+OUT_DIR  = CACHE_DIR / "comm_zorge"
+OUT      = OUT_DIR / "cian.xml"
+ENR_DIR  = OUT_DIR / "enriched"     # обогащённые планировки (обложка)
+TPL_DIR  = OUT_DIR / "templates"
+PLANS_DIR = OUT_DIR / "plans"
 
 # (ExternalId в фиде, id помещения в ProfitBase, kind, FloorsCount дома, назначение)
 LISTINGS = [
@@ -98,6 +107,31 @@ def _T(parent, tag, val):
     return e
 
 
+def _enriched(it, ext_id):
+    """Брендовая планировка (жилой шаблон Зорге + подписи Площадь/Высота/Мощность).
+    План берём из preset помещения. Возвращает URL или None."""
+    plan_url = it.get("preset")
+    area = (it.get("area", {}) or {}).get("area_total")
+    if not (plan_url and area):
+        return None
+    ceiling = _cf(it, CEILING_FIELD)
+    try:
+        ceiling = float(ceiling)
+    except Exception:
+        ceiling = None
+    power = _cf(it, POWER_FIELD)
+    for d in (ENR_DIR, TPL_DIR, PLANS_DIR):
+        d.mkdir(parents=True, exist_ok=True)
+    out = ENR_DIR / f"{ext_id}.png"
+    out.unlink(missing_ok=True)
+    lot = types.SimpleNamespace(area=float(area), ceiling_m=ceiling,
+                                power_kw=str(power) if power else None)
+    enrich_commercial(lot, plan_url, COMMERCIAL_TEMPLATE_ZORGE_URL,
+                      COMMERCIAL_TEMPLATE_ZORGE_EXT, COMMERCIAL_LAYOUT_ZORGE,
+                      TPL_DIR, PLANS_DIR, out)
+    return f"{PUBLIC_BASE_URL}/comm-zorge-img/{file_ver(out)}/{ext_id}.png"
+
+
 def refresh():
     key = os.environ.get("PB_API_KEY", "")
     if not key:
@@ -153,18 +187,27 @@ def refresh():
             v = v.strip()
             if v:
                 ET.SubElement(types, "String").text = v
-        # План + фото
+        # Обогащённая планировка — обложка; затем фото из planImages
         imgs = [im.get("source") for im in (it.get("planImages") or [])
                 if im.get("source") and not im.get("technical")]
-        cover = it.get("preset") or (imgs[0] if imgs else None)
+        try:
+            enr = _enriched(it, ext_id)
+        except Exception as e:
+            enr = None
+            print(f"[comm-zorge] enrich {ext_id} failed: {e}")
+        cover = enr or (imgs[0] if imgs else None)
         if cover:
             lp = ET.SubElement(o, "LayoutPhoto")
             _T(lp, "FullUrl", cover); _T(lp, "IsDefault", "1")
-        if imgs:
-            photos = ET.SubElement(o, "Photos")
-            for i, u in enumerate(imgs):
-                ps = ET.SubElement(photos, "PhotoSchema")
-                _T(ps, "FullUrl", u); _T(ps, "IsDefault", "1" if i == 0 else "0")
+        photos = ET.SubElement(o, "Photos")
+        if cover:
+            ps = ET.SubElement(photos, "PhotoSchema")
+            _T(ps, "FullUrl", cover); _T(ps, "IsDefault", "1")
+        for u in imgs:
+            if u == cover:
+                continue
+            ps = ET.SubElement(photos, "PhotoSchema")
+            _T(ps, "FullUrl", u); _T(ps, "IsDefault", "0")
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     ET.indent(root)

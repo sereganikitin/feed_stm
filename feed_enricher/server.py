@@ -547,6 +547,23 @@ def serve_comm_zorge_cian():
     return send_file(p, mimetype="application/xml")
 
 
+@app.route("/comm-zorge-img/<name>")
+def serve_comm_zorge_img(name: str):
+    """Обогащённые планировки Зорге-коммерции."""
+    from . import comm_zorge_cian
+    if "/" in name or "\\" in name:
+        abort(404)
+    p = comm_zorge_cian.ENR_DIR / name
+    if not p.exists():
+        abort(404)
+    return send_file(p, mimetype="image/png")
+
+
+@app.route("/comm-zorge-img/<ver>/<name>")
+def serve_comm_zorge_img_v(ver: str, name: str):
+    return serve_comm_zorge_img(name)
+
+
 @app.route("/refresh-comm-zorge", methods=["POST"])
 def manual_refresh_comm_zorge():
     from . import comm_zorge_cian

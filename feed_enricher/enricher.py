@@ -143,6 +143,9 @@ def enrich_commercial(lot, plan_url: str, template_url: str, template_ext: str,
         canvas.alpha_composite(pr, (box[0] + (tw - pr.width) // 2, box[1] + (th - pr.height) // 2))
 
     draw = ImageDraw.Draw(canvas)
+    # Прямоугольники-заглушки (закрыть ненужные элементы шаблона, напр. плашки рассрочки)
+    for cr in layout.get("cover_rects", []):
+        draw.rectangle(cr, fill=layout.get("cover_color", (255, 255, 255)) + (255,))
     ov = layout.get("header_overlay")
     if ov:
         draw.rectangle(ov["clear_rect"], fill=ov.get("clear_color", (255, 255, 255)) + (255,))

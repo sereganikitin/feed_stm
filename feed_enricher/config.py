@@ -268,6 +268,29 @@ COMMERCIAL_LAYOUT = {
     "power_value":   {"pos": (1029, 178), "size": 50, "color": (20, 30, 50), "anchor": "mm"},
 }
 
+# Обогащение коммерции Зорге 9 — на ЖИЛОМ шаблоне Зорге (там фото+брендинг «ЗОРГЕ №9»).
+# Жилой шаблон: план слева, метки Этаж/Площадь/Комнаты сверху, плашки рассрочки снизу.
+# Под коммерцию: закрываем метки и плашки, рисуем Высота/Площадь/Мощность.
+COMMERCIAL_TEMPLATE_ZORGE_URL = "https://static.tildacdn.com/tild3130-3231-4832-a464-623331636437/plan-z9.jpg"
+COMMERCIAL_TEMPLATE_ZORGE_EXT = "jpg"
+COMMERCIAL_LAYOUT_ZORGE = {
+    "size":       (1200, 900),
+    "plan_box":   (60, 290, 630, 680),
+    "header_overlay": {
+        "clear_rect": (90, 188, 610, 242),
+        "clear_color": (255, 255, 255),
+        "labels": [
+            {"pos": (167, 215), "size": 20, "color": (20, 30, 50), "anchor": "mm", "text": "Высота"},
+            {"pos": (346, 215), "size": 20, "color": (20, 30, 50), "anchor": "mm", "text": "Площадь"},
+            {"pos": (526, 215), "size": 20, "color": (20, 30, 50), "anchor": "mm", "text": "Мощность"},
+        ],
+    },
+    "cover_rects": [(120, 700, 630, 830)],   # закрыть жилые плашки рассрочки
+    "ceiling_value": {"pos": (167, 155), "size": 46, "color": (20, 30, 50), "anchor": "mm"},
+    "area_value":    {"pos": (346, 155), "size": 46, "color": (20, 30, 50), "anchor": "mm"},
+    "power_value":   {"pos": (526, 155), "size": 46, "color": (20, 30, 50), "anchor": "mm"},
+}
+
 
 def file_ver(path) -> str:
     """Версия файла для cache-busting ссылок (?v=...). Меняется при перезаписи файла —

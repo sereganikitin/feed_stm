@@ -34,6 +34,9 @@ NAZ_FIELD     = "pbcf_61e947e1daaa1"   # «Назначение помещени
 
 # Срок сдачи объекта (одинаков для всех помещений). Quarter у ЦИАН — словом.
 DEADLINE = {"quarter": "fourth", "year": "2027", "complete": "false"}
+# Та же дата текстом — дописывается в конец <Description> (редактировать описание
+# в ProfitBase через API нельзя, поэтому строку добавляем на стороне фида).
+DEADLINE_DESC_LINE = "Срок сдачи в эксплуатацию: 4 квартал 2027 года"
 
 # Назначение по лотам (ExternalId → текст). Используется, если поле
 # «Назначение помещения» в ProfitBase пустое. Заполнят в ProfitBase — оно приоритетнее.
@@ -140,6 +143,10 @@ def refresh():
         lots += 1
         eid = (obj.findtext("ExternalId") or "").strip()
         _set(obj, "Category", "freeAppointmentObjectRent")
+        # Срок сдачи текстом — в конец описания (идемпотентно)
+        de = obj.find("Description")
+        if de is not None and de.text and DEADLINE_DESC_LINE not in de.text:
+            de.text = de.text.rstrip() + "\n\n" + DEADLINE_DESC_LINE
         bt = obj.find("BargainTerms")
         if bt is None:
             bt = ET.SubElement(obj, "BargainTerms")

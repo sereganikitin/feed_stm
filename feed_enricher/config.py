@@ -273,22 +273,27 @@ COMMERCIAL_LAYOUT = {
 # Под коммерцию: закрываем метки и плашки, рисуем Высота/Площадь/Мощность.
 COMMERCIAL_TEMPLATE_ZORGE_URL = "https://static.tildacdn.com/tild3130-3231-4832-a464-623331636437/plan-z9.jpg"
 COMMERCIAL_TEMPLATE_ZORGE_EXT = "jpg"
+_Z_CREAM = (248, 240, 226)   # тёплый фон левой части шаблона (замер)
+# Левое поле: x 0..660, центр ~330. Числа и план центруем по 330 (3 колонки шаг 179).
 COMMERCIAL_LAYOUT_ZORGE = {
     "size":       (1200, 900),
-    "plan_box":   (60, 290, 630, 680),
+    "plan_box":   (45, 330, 615, 695),   # центр x=330, чуть ниже (на месте плашек)
     "header_overlay": {
-        "clear_rect": (90, 188, 610, 242),
-        "clear_color": (255, 255, 255),
+        "clear_rect": (60, 185, 600, 245),
+        "clear_color": _Z_CREAM,
         "labels": [
-            {"pos": (167, 215), "size": 20, "color": (20, 30, 50), "anchor": "mm", "text": "Высота"},
-            {"pos": (346, 215), "size": 20, "color": (20, 30, 50), "anchor": "mm", "text": "Площадь"},
-            {"pos": (526, 215), "size": 20, "color": (20, 30, 50), "anchor": "mm", "text": "Мощность"},
+            {"pos": (151, 215), "size": 20, "color": (20, 30, 50), "anchor": "mm", "text": "Высота"},
+            {"pos": (330, 215), "size": 20, "color": (20, 30, 50), "anchor": "mm", "text": "Площадь"},
+            {"pos": (509, 215), "size": 20, "color": (20, 30, 50), "anchor": "mm", "text": "Мощность"},
         ],
     },
-    "cover_rects": [(120, 700, 630, 830)],   # закрыть жилые плашки рассрочки
-    "ceiling_value": {"pos": (167, 155), "size": 46, "color": (20, 30, 50), "anchor": "mm"},
-    "area_value":    {"pos": (346, 155), "size": 46, "color": (20, 30, 50), "anchor": "mm"},
-    "power_value":   {"pos": (526, 155), "size": 46, "color": (20, 30, 50), "anchor": "mm"},
+    "cover_rects": [
+        {"rect": (40, 695, 640, 862), "color": _Z_CREAM},    # плашки рассрочки слева → в цвет фона (невидимо)
+        {"rect": (655, 757, 1170, 801), "color": (1, 1, 1)}, # бейдж «рассрочка» справа (под «Дом готов») → тёмный фон
+    ],
+    "ceiling_value": {"pos": (151, 155), "size": 46, "color": (20, 30, 50), "anchor": "mm"},
+    "area_value":    {"pos": (330, 155), "size": 46, "color": (20, 30, 50), "anchor": "mm"},
+    "power_value":   {"pos": (509, 155), "size": 46, "color": (20, 30, 50), "anchor": "mm"},
 }
 
 

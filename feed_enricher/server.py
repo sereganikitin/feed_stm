@@ -504,6 +504,23 @@ def serve_comm_rent_cian():
     return send_file(p, mimetype="application/xml")
 
 
+@app.route("/comm-rent-img/<name>")
+def serve_comm_rent_img(name: str):
+    """Обогащённые планировки коммерции аренды (Берзарина 37)."""
+    from . import comm_cian_rent
+    if "/" in name or "\\" in name:
+        abort(404)
+    p = comm_cian_rent.ENR_DIR / name
+    if not p.exists():
+        abort(404)
+    return send_file(p, mimetype="image/png")
+
+
+@app.route("/comm-rent-img/<ver>/<name>")
+def serve_comm_rent_img_v(ver: str, name: str):
+    return serve_comm_rent_img(name)
+
+
 @app.route("/refresh-comm-rent", methods=["POST"])
 def manual_refresh_comm_rent():
     from . import comm_cian_rent

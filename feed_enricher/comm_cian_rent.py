@@ -36,7 +36,10 @@ NAZ_FIELD     = "pbcf_61e947e1daaa1"   # «Назначение помещени
 DEADLINE = {"quarter": "fourth", "year": "2027", "complete": "false"}
 # Та же дата текстом — дописывается в конец <Description> (редактировать описание
 # в ProfitBase через API нельзя, поэтому строку добавляем на стороне фида).
-DEADLINE_DESC_LINE = "Срок сдачи в эксплуатацию: 4 квартал 2027 года"
+# Это «времянка»: как только в описании ProfitBase появится упоминание срока сдачи
+# (DEADLINE_DESC_MARKER), фид перестаёт подставлять свою строку и берёт текст из профита.
+DEADLINE_DESC_LINE   = "Срок сдачи в эксплуатацию: 4 квартал 2027 года"
+DEADLINE_DESC_MARKER = "срок сдачи"
 
 # Назначение по лотам (ExternalId → текст). Используется, если поле
 # «Назначение помещения» в ProfitBase пустое. Заполнят в ProfitBase — оно приоритетнее.
@@ -143,9 +146,10 @@ def refresh():
         lots += 1
         eid = (obj.findtext("ExternalId") or "").strip()
         _set(obj, "Category", "freeAppointmentObjectRent")
-        # Срок сдачи текстом — в конец описания (идемпотентно)
+        # Срок сдачи текстом — дописываем в конец, ПОКА в описании из ProfitBase
+        # нет упоминания срока сдачи. Появится в профите — берём профит как есть.
         de = obj.find("Description")
-        if de is not None and de.text and DEADLINE_DESC_LINE not in de.text:
+        if de is not None and de.text and DEADLINE_DESC_MARKER not in de.text.lower():
             de.text = de.text.rstrip() + "\n\n" + DEADLINE_DESC_LINE
         bt = obj.find("BargainTerms")
         if bt is None:

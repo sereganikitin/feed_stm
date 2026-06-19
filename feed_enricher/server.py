@@ -250,6 +250,11 @@ def _refresh_loop():
             print(f"[auto-refresh-comm-rent] {comm_cian_rent.refresh()}")
         except Exception as e:
             print(f"[auto-refresh-comm-rent] error: {e}")
+        try:
+            from . import comm_zorge_cian
+            print(f"[auto-refresh-comm-zorge] {comm_zorge_cian.refresh()}")
+        except Exception as e:
+            print(f"[auto-refresh-comm-zorge] error: {e}")
         time.sleep(REFRESH_INTERVAL_HOURS * 3600)
 
 
@@ -525,6 +530,27 @@ def serve_comm_rent_img_v(ver: str, name: str):
 def manual_refresh_comm_rent():
     from . import comm_cian_rent
     return jsonify(comm_cian_rent.refresh())
+
+
+@app.route("/feed/comm/zorge-cian.xml")
+def serve_comm_zorge_cian():
+    """Зорге 9 коммерция — ЦИАН (продажа + аренда, сборка из ProfitBase API)."""
+    from . import comm_zorge_cian
+    p = comm_zorge_cian.OUT
+    if not p.exists():
+        try:
+            comm_zorge_cian.refresh()
+        except Exception:
+            pass
+    if not p.exists():
+        abort(503)
+    return send_file(p, mimetype="application/xml")
+
+
+@app.route("/refresh-comm-zorge", methods=["POST"])
+def manual_refresh_comm_zorge():
+    from . import comm_zorge_cian
+    return jsonify(comm_zorge_cian.refresh())
 
 
 @app.route("/refresh-commercial", methods=["POST"])

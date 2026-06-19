@@ -15,6 +15,7 @@
 """
 import os
 import json
+import re
 import time
 import types
 import urllib.request
@@ -29,6 +30,20 @@ PB_API_BASE = "https://pb7828.profitbase.ru/api/v4/json"
 RENT_FIELD    = "pbcf_6218cf5652a5d"   # «Стоимость аренды, руб./мес.»
 CEILING_FIELD = "pbcf_6218cf455c37f"   # «Высота потолка», м
 POWER_FIELD   = "pbcf_6218cf2f8b6e2"   # «Подводимая мощность, кВт»
+NAZ_FIELD     = "pbcf_61e947e1daaa1"   # «Назначение помещения» (торговая/кафе/…)
+
+# Срок сдачи объекта (одинаков для всех помещений). Quarter у ЦИАН — словом.
+DEADLINE = {"quarter": "fourth", "year": "2027", "complete": "false"}
+
+# Назначение по лотам (ExternalId → текст). Используется, если поле
+# «Назначение помещения» в ProfitBase пустое. Заполнят в ProfitBase — оно приоритетнее.
+NAZ_MAP = {
+    "17835265": "Торговля / услуги",          # П-4
+    "17835266": "Торговля / услуги",          # П-8
+    "17835267": "Кафе / ресторан",            # П-12
+    "17835272": "Кафе / ресторан",            # П-14
+    "17835273": "Фитнес / студии / секции",   # П-17
+}
 OUT_DIR  = CACHE_DIR / "comm_rent"
 OUT      = OUT_DIR / "b37-cian.xml"
 ENR_DIR  = OUT_DIR / "enriched"        # наши обогащённые планировки
@@ -63,7 +78,7 @@ def _fields(token, pid):
     p = _api(PB_API_BASE + "/property?full=1&access_token=" + token + "&id=" + str(pid))
     items = p.get("data") if isinstance(p.get("data"), list) else (p.get("data") or p)
     it = items[0] if isinstance(items, list) and items else items
-    out = {"rent": None, "ceiling": None, "power": None}
+    out = {"rent": None, "ceiling": None, "power": None, "naz": None}
     for x in (it.get("custom_fields") or []):
         fid, val = x.get("id"), x.get("value")
         if val in (None, "", 0, "0"):
@@ -76,6 +91,8 @@ def _fields(token, pid):
             except Exception: pass
         elif fid == POWER_FIELD:
             out["power"] = str(val)
+        elif fid == NAZ_FIELD:
+            out["naz"] = str(val)
     return out
 
 
@@ -126,12 +143,40 @@ def refresh():
         bt = obj.find("BargainTerms")
         if bt is None:
             bt = ET.SubElement(obj, "BargainTerms")
-        f = _fields(token, eid) if eid else {"rent": None, "ceiling": None, "power": None}
+        f = _fields(token, eid) if eid else {"rent": None, "ceiling": None, "power": None, "naz": None}
         if f["rent"]:
             _set(bt, "Price", f["rent"]); priced += 1
         _set(bt, "currency", "rur")
         _set(bt, "PriceType", "all")
         _set(bt, "PaymentPeriod", "monthly")
+
+        # Срок сдачи объекта → Building/Deadline (квартал словом)
+        bld = obj.find("Building")
+        if bld is None:
+            bld = ET.SubElement(obj, "Building")
+        dl = bld.find("Deadline")
+        if dl is None:
+            dl = ET.SubElement(bld, "Deadline")
+        _set(dl, "Quarter", DEADLINE["quarter"])
+        _set(dl, "Year", DEADLINE["year"])
+        _set(dl, "IsComplete", DEADLINE["complete"])
+
+        # Назначение помещения → Speciality. Приоритет: поле ProfitBase, иначе мэппинг.
+        # Значения через запятую/точку с запятой = несколько назначений.
+        naz = f.get("naz") or NAZ_MAP.get(eid)
+        if naz:
+            sp = obj.find("Speciality")
+            if sp is None:
+                sp = ET.SubElement(obj, "Speciality")
+            types = sp.find("Types")
+            if types is None:
+                types = ET.SubElement(sp, "Types")
+            for s in list(types):           # очищаем старое (в т.ч. «Свободное назначение»)
+                types.remove(s)
+            for val in re.split(r"[;,]", naz):
+                val = val.strip()
+                if val:
+                    ET.SubElement(types, "String").text = val
 
         # Обогащённая планировка — ПЕРВОЙ картинкой (обложка)
         area = (obj.findtext("TotalArea") or "").strip()

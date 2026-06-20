@@ -329,7 +329,22 @@ def commercial_page():
             n = 0
         rows.append({"slug": slug, "p": p, "n": max(n, 0),
                      "enriched": len(list(d["enriched"].glob("*.png")))})
-    return render_template_string(_COMM_HTML, rows=rows, base=PUBLIC_BASE_URL)
+    # Отдельные фиды (собираются кодом, не через мастер)
+    import xml.etree.ElementTree as _ET
+    from . import comm_zorge_cian, comm_cian_rent
+    dedicated = []
+    for key, name, refr, feed, path in [
+        ("comm-zorge", "Зорге 9 — коммерция (ЦИАН)", "/refresh-comm-zorge",
+         "/feed/comm/zorge-cian.xml", comm_zorge_cian.OUT),
+        ("comm-b37rent", "Б37 — коммерция аренда (ЦИАН)", "/refresh-comm-rent",
+         "/feed/comm/b37-rent-cian.xml", comm_cian_rent.OUT),
+    ]:
+        try:
+            n = len(list(_ET.parse(path).getroot().iter("object"))) if path.exists() else 0
+        except Exception:
+            n = 0
+        dedicated.append({"key": key, "name": name, "refresh": refr, "feed": feed, "n": n})
+    return render_template_string(_COMM_HTML, rows=rows, dedicated=dedicated, base=PUBLIC_BASE_URL)
 
 
 @admin_bp.route("/commercial/save", methods=["POST"])
@@ -761,6 +776,21 @@ _COMM_HTML = _CSS + """<title>Коммерческие фиды</title>
      <button class="btn green">Пересформировать</button></form>
    <form method=post action="{{url_for('admin.commercial_delete',slug=r.slug)}}" style="display:inline">
      <button class="btn red" onclick="return confirm('Удалить {{r.slug}}?')">Удалить</button></form>
+  </div>
+ {% endfor %}
+</div>
+<div class=card>
+ <h2 style="margin-top:0">Отдельные фиды (через ProfitBase API)</h2>
+ <p class=muted>Собираются кодом, не через мастер. Состав/назначения правятся в коде.</p>
+ {% for d in dedicated %}
+  <div style="border-bottom:1px solid #eef1f5;padding:10px 0">
+   <b>{{d.name}}</b> · лотов {{d.n}}
+   <div style="margin:4px 0">
+     <a href="{{base}}{{d.feed}}" target=_blank>XML</a> ·
+     <a href="{{base}}/?feed={{d.key}}" target=_blank>превью карточек</a>
+   </div>
+   <form method=post action="{{base}}{{d.refresh}}" style="display:inline">
+     <button class="btn green">Обновить</button></form>
   </div>
  {% endfor %}
 </div>

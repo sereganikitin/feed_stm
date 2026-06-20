@@ -78,8 +78,10 @@ def _sync_cian_photos(slug, dirs):
     if not cfg:
         return
     try:
+        from .config import excluded_photos
         n = len(sync_public_folder(cfg["yadisk_public_key"], cfg["yadisk_path"],
-                                   dirs["extra_cian"], mirror=True))
+                                   dirs["extra_cian"], mirror=True,
+                                   exclude=excluded_photos(slug, "cian")))
         print(f"[{slug}] cian photos synced: {n}")
     except Exception as e:
         print(f"[{slug}] cian yadisk sync failed: {e}")
@@ -176,8 +178,10 @@ def refresh_project(slug: str) -> dict:
             extra_cfg = proj.get("avito_extra_photos")
             if extra_cfg:
                 try:
+                    from .config import excluded_photos
                     n = len(sync_public_folder(
-                        extra_cfg["yadisk_public_key"], extra_cfg["yadisk_path"], dirs["extra"]))
+                        extra_cfg["yadisk_public_key"], extra_cfg["yadisk_path"], dirs["extra"],
+                        exclude=excluded_photos(slug, "avito")))
                     print(f"[{slug}] extra photos synced: {n}")
                 except Exception as e:
                     print(f"[{slug}] yadisk sync failed: {e}")
@@ -191,8 +195,10 @@ def refresh_project(slug: str) -> dict:
             yx_cfg = proj.get("yandex_extra_photos")
             if yx_cfg:
                 try:
+                    from .config import excluded_photos
                     n = len(sync_public_folder(
-                        yx_cfg["yadisk_public_key"], yx_cfg["yadisk_path"], dirs["extra_yandex"]))
+                        yx_cfg["yadisk_public_key"], yx_cfg["yadisk_path"], dirs["extra_yandex"],
+                        exclude=excluded_photos(slug, "yandex")))
                     print(f"[{slug}] yandex photos synced: {n}")
                 except Exception as e:
                     print(f"[{slug}] yandex yadisk sync failed: {e}")

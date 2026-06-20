@@ -127,7 +127,7 @@ def list_public_images(public_key: str, path: str) -> list[dict]:
 
 def sync_public_folder(public_key: str, path: str, dest_dir: Path,
                        max_side: int = 2560, quality: int = 86,
-                       mirror: bool = False) -> list[Path]:
+                       mirror: bool = False, exclude=None) -> list[Path]:
     """Скачать (идемпотентно) все картинки публичной папки в dest_dir как NN.jpg.
 
     Уже скачанные файлы пропускаются по имени. Возвращает отсортированный список путей.
@@ -136,12 +136,19 @@ def sync_public_folder(public_key: str, path: str, dest_dir: Path,
     mirror=True — режим зеркала: файлы, которые БЫЛИ скачаны из ЯД, но в ЯД больше
     не существуют, удаляются локально. Манифест _src.json хранит имена из ЯД, поэтому
     файлы, добавленные иначе (ручная загрузка), не трогаются.
+
+    exclude — множество имён файлов, которые НЕ качать из ЯД и удалять локально
+    (чёрный список: удалённое вручную в админке, чтобы не возвращалось из ЯД).
     """
     dest_dir.mkdir(parents=True, exist_ok=True)
+    exclude = set(exclude or ())
     saved: list[Path] = []
     yd_names: list[str] = []
     for it in list_public_images(public_key, path):
         out = dest_dir / (Path(it["name"]).stem + ".jpg")
+        if out.name in exclude:                    # чёрный список — не качаем, удаляем если есть
+            out.unlink(missing_ok=True)
+            continue
         yd_names.append(out.name)
         if not out.exists():
             href = _api_get("/download", {"public_key": public_key, "path": it["path"]})["href"]

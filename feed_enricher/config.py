@@ -315,13 +315,27 @@ def lot_view_urls(slug: str, internal_id: str) -> list:
             for f in sorted(vdir.glob("*.jpg"))]
 
 
+def excluded_photos(slug: str, kind: str) -> set:
+    """Имена фото, исключённых вручную в админке — не возвращать из ЯД и не показывать."""
+    return set(load_overrides().get(slug, {}).get("photos_excluded", {}).get(kind, []))
+
+
+def add_excluded_photo(slug: str, kind: str, name: str) -> None:
+    """Добавить фото в чёрный список набора (чтобы синк с ЯД его больше не возвращал)."""
+    data = load_overrides()
+    lst = data.setdefault(slug, {}).setdefault("photos_excluded", {}).setdefault(kind, [])
+    if name not in lst:
+        lst.append(name)
+    save_overrides(data)
+
+
 def cian_extra_urls(slug: str) -> list:
     """URL общего набора фото карточки ЦИАН (cache/<slug>/extra_cian/*.jpg)
     в порядке из настройки extra_photo_order_cian (новые — в конец), с версией в пути."""
     d = CACHE_DIR / slug / "extra_cian"
     if not d.exists():
         return []
-    files = {p.name for p in d.glob("*.jpg")}
+    files = {p.name for p in d.glob("*.jpg")} - excluded_photos(slug, "cian")
     order = [n for n in (get_project(slug).get("extra_photo_order_cian") or []) if n in files]
     names = order + sorted(files - set(order))
     return [f"{PUBLIC_BASE_URL}/extra_cian/{slug}/{file_ver(d / n)}/{n}" for n in names]

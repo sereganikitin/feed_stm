@@ -25,7 +25,8 @@ from flask import (Blueprint, abort, flash, jsonify, redirect, render_template_s
 from werkzeug.utils import secure_filename
 
 from .config import (PROJECTS, PUBLIC_BASE_URL, ADMIN_DIR, project_dirs,
-                     get_project, set_override, load_overrides)
+                     get_project, set_override, load_overrides,
+                     excluded_photos, add_excluded_photo)
 from .yadisk import save_resized_jpeg, sync_public_folder
 from .assembler_avito import enrich_pb_avito_feed
 from .assembler_yandex import assemble_yandex_feed, coords_from_avito
@@ -205,7 +206,7 @@ def _regenerate_plans(slug: str) -> int:
 def _photos(slug: str, kind: str = "avito") -> list[str]:
     """Имена фото набора в порядке из настроек (новые — в конец)."""
     k = _KINDS[kind]
-    files = {p.name for p in project_dirs(slug)[k["dir"]].glob("*.jpg")}
+    files = {p.name for p in project_dirs(slug)[k["dir"]].glob("*.jpg")} - excluded_photos(slug, kind)
     order = [n for n in (get_project(slug).get(k["order_key"]) or []) if n in files]
     return order + sorted(files - set(order))
 
@@ -530,8 +531,9 @@ def delete_photo(slug: str, kind: str):
         p.unlink()
     order = [n for n in (get_project(slug).get(k["order_key"]) or []) if n != name]
     set_override(slug, k["order_key"], order)
+    add_excluded_photo(slug, kind, name)   # чёрный список — синк с ЯД больше не вернёт
     _rebuild(slug, kind)
-    flash(f"Удалено: {name}.")
+    flash(f"Удалено: {name}. Из Я.Диска больше не вернётся (в чёрном списке).")
     return redirect(url_for("admin.project", slug=slug))
 
 
@@ -558,7 +560,8 @@ def sync_yd(slug: str, kind: str):
         return redirect(url_for("admin.project", slug=slug))
     try:
         n = len(sync_public_folder(cfg["yadisk_public_key"], cfg["yadisk_path"],
-                                   project_dirs(slug)[k["dir"]], mirror=k.get("mirror", False)))
+                                   project_dirs(slug)[k["dir"]], mirror=k.get("mirror", False),
+                                   exclude=excluded_photos(slug, kind)))
         _rebuild(slug, kind)
         flash(f"С Яндекс.Диска синхронизировано ({k['title']}): {n}.")
     except Exception as e:

@@ -274,19 +274,9 @@ def _views_loop():
 
 @app.route("/")
 def index():
-    rows = []
-    for slug, p in PROJECTS.items():
-        rows.append(
-            f'<li><b>{p["name"]}</b> ({slug}) — '
-            f'<a href="/gallery/{slug}">галерея</a> · '
-            f'<a href="/feed/{slug}.xml">ЦИАН XML</a> · '
-            f'<a href="/feed/{slug}-avito.xml">Авито XML</a> · '
-            f'<a href="/feed/{slug}-yandex.xml">Яндекс XML</a></li>'
-        )
-    return f"""<!doctype html><html><head><meta charset='utf-8'><title>feed_enricher</title>
-<style>body{{font-family:system-ui;max-width:680px;margin:40px auto;padding:0 20px;color:#222}}</style>
-</head><body><h1>feed_enricher</h1><ul>{''.join(rows)}</ul>
-<p><a href="/admin">→ Панель управления</a></p></body></html>"""
+    from flask import request
+    from . import preview
+    return preview.render(request.args.get("feed"))
 
 
 @app.route("/gallery/<slug>")

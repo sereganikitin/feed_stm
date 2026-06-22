@@ -167,14 +167,14 @@ def refresh():
         lots += 1
         eid = (obj.findtext("ExternalId") or "").strip()
         _set(obj, "Category", "freeAppointmentObjectRent")
-        # Описание: чистим запрещённые символы (& и т.п.); срок сдачи берём ИЗ ProfitBase
-        # (если в описании уже есть упоминание срока — оставляем его), иначе дописываем
-        # строку из конфига как фолбэк.
+        # Описание: чистим запрещённые символы (& и т.п.); срок сдачи — АВТОРИТЕТНО из
+        # конфига (зафиксирован): убираем любую существующую строку «Срок сдачи…»
+        # (в т.ч. просочившуюся из ProfitBase) и ставим актуальную.
         de = obj.find("Description")
         if de is not None and de.text:
             de.text = _clean_desc(de.text)
-            if DEADLINE_DESC_MARKER not in de.text.lower():
-                de.text = de.text.rstrip() + "\n\n" + DEADLINE_DESC_LINE
+            de.text = re.sub(r"\n*\s*Срок сдачи в эксплуатацию:[^\n]*", "", de.text).rstrip()
+            de.text = de.text + "\n\n" + DEADLINE_DESC_LINE
         bt = obj.find("BargainTerms")
         if bt is None:
             bt = ET.SubElement(obj, "BargainTerms")
@@ -185,18 +185,15 @@ def refresh():
         _set(bt, "PriceType", "all")
         _set(bt, "PaymentPeriod", "monthly")
 
-        # Срок сдачи → Building/Deadline. Парсим «N квартал YYYY» из описания ProfitBase
-        # (единый источник), иначе фолбэк на конфиг DEADLINE.
-        parsed = _parse_deadline(de.text if (de is not None and de.text) else "")
-        q, y = parsed if parsed else (DEADLINE["quarter"], DEADLINE["year"])
+        # Срок сдачи → Building/Deadline — АВТОРИТЕТНО из конфига DEADLINE (зафиксирован).
         bld = obj.find("Building")
         if bld is None:
             bld = ET.SubElement(obj, "Building")
         dl = bld.find("Deadline")
         if dl is None:
             dl = ET.SubElement(bld, "Deadline")
-        _set(dl, "Quarter", q)
-        _set(dl, "Year", y)
+        _set(dl, "Quarter", DEADLINE["quarter"])
+        _set(dl, "Year", DEADLINE["year"])
         _set(dl, "IsComplete", DEADLINE["complete"])
 
         # Назначение помещения → Speciality. Приоритет: поле ProfitBase, иначе мэппинг.

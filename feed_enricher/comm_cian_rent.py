@@ -33,12 +33,12 @@ POWER_FIELD   = "pbcf_6218cf2f8b6e2"   # «Подводимая мощность
 NAZ_FIELD     = "pbcf_61e947e1daaa1"   # «Назначение помещения» (торговая/кафе/…)
 
 # Срок сдачи объекта (одинаков для всех помещений). Quarter у ЦИАН — словом.
-DEADLINE = {"quarter": "fourth", "year": "2027", "complete": "false"}
+DEADLINE = {"quarter": "second", "year": "2027", "complete": "false"}
 # Та же дата текстом — дописывается в конец <Description> (редактировать описание
 # в ProfitBase через API нельзя, поэтому строку добавляем на стороне фида).
 # Это «времянка»: как только в описании ProfitBase появится упоминание срока сдачи
 # (DEADLINE_DESC_MARKER), фид перестаёт подставлять свою строку и берёт текст из профита.
-DEADLINE_DESC_LINE   = "Срок сдачи в эксплуатацию: 4 квартал 2027 года"
+DEADLINE_DESC_LINE   = "Срок сдачи в эксплуатацию: 2 квартал 2027 года"
 DEADLINE_DESC_MARKER = "срок сдачи"
 
 # Назначение по лотам (ExternalId → текст). Используется, если поле
@@ -156,13 +156,14 @@ def refresh():
         lots += 1
         eid = (obj.findtext("ExternalId") or "").strip()
         _set(obj, "Category", "freeAppointmentObjectRent")
-        # Описание: чистим запрещённые символы (& и т.п.) + срок сдачи текстом,
-        # ПОКА в описании из ProfitBase нет упоминания срока (появится в профите — берём как есть).
+        # Описание: чистим запрещённые символы (& и т.п.); срок сдачи — авторитетно из
+        # конфига: убираем любую существующую строку «Срок сдачи…» (в т.ч. из ProfitBase)
+        # и ставим актуальную.
         de = obj.find("Description")
         if de is not None and de.text:
             de.text = _clean_desc(de.text)
-            if DEADLINE_DESC_MARKER not in de.text.lower():
-                de.text = de.text.rstrip() + "\n\n" + DEADLINE_DESC_LINE
+            de.text = re.sub(r"\n*\s*Срок сдачи в эксплуатацию:[^\n]*", "", de.text).rstrip()
+            de.text = de.text + "\n\n" + DEADLINE_DESC_LINE
         bt = obj.find("BargainTerms")
         if bt is None:
             bt = ET.SubElement(obj, "BargainTerms")

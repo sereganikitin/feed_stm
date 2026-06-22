@@ -107,6 +107,39 @@ def _T(parent, tag, val):
     return e
 
 
+def _clean_desc(s: str) -> str:
+    """Чистка описания под требования ЦИАН: '&' запрещён, '№ \\' удаляются, '«» –' заменяются."""
+    if not s:
+        return s
+    s = s.replace("&amp;", "и").replace(" & ", " и ").replace("&", "и")
+    s = s.replace("«", '"').replace("»", '"').replace("–", "-")
+    s = s.replace("№", "").replace("\\", "")
+    return s.strip()
+
+
+def _build_desc(it, naz):
+    """Описание из данных помещения (если в ProfitBase пусто) — ЦИАН требует 15–3000 симв."""
+    area = (it.get("area", {}) or {}).get("area_total")
+    ceiling = _cf(it, CEILING_FIELD)
+    power = _cf(it, POWER_FIELD)
+    floor = it.get("floor")
+    head = "Помещение свободного назначения"
+    if naz:
+        head += f" ({naz})"
+    spec = [f"площадь {area} м²"] if area else []
+    if ceiling:
+        spec.append(f"высота потолка {ceiling} м")
+    if power:
+        spec.append(f"подводимая мощность {power} кВт")
+    if floor not in (None, ""):
+        spec.append(f"этаж {floor}")
+    parts = [f"{head} в ЖК «Зорге 9»."]
+    if spec:
+        parts.append((", ".join(spec)).capitalize() + ".")
+    parts.append(f"Адрес: {ADDRESS}. Дом сдан (3 квартал 2023 года).")
+    return " ".join(parts)
+
+
 def _enriched(it, ext_id):
     """Брендовая планировка (жилой шаблон Зорге + подписи Площадь/Высота/Мощность).
     План берём из preset помещения. Возвращает URL или None."""
@@ -148,7 +181,10 @@ def refresh():
         o = ET.SubElement(root, "object")
         _T(o, "Category", "freeAppointmentObjectRent" if kind == "rent" else "freeAppointmentObjectSale")
         _T(o, "ExternalId", ext_id)
-        _T(o, "Description", it.get("description"))
+        desc = _clean_desc(it.get("description") or "")
+        if len(desc) < 15:                          # ЦИАН требует 15–3000 симв.
+            desc = _clean_desc(_build_desc(it, naz))
+        _T(o, "Description", desc)
         _T(o, "Address", ADDRESS)
         ph = ET.SubElement(o, "Phones"); psc = ET.SubElement(ph, "PhoneSchema")
         _T(psc, "CountryCode", "+7"); _T(psc, "Number", PHONE.lstrip("+7"))

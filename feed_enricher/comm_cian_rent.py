@@ -110,6 +110,16 @@ def _set(parent, tag, val):
     return e
 
 
+def _clean_desc(s: str) -> str:
+    """Чистка описания под требования ЦИАН: '&' запрещён, '№ \\' удаляются, '«» –' заменяются."""
+    if not s:
+        return s
+    s = s.replace("&amp;", "и").replace(" & ", " и ").replace("&", "и")
+    s = s.replace("«", '"').replace("»", '"').replace("–", "-")
+    s = s.replace("№", "").replace("\\", "")
+    return s
+
+
 def _enriched_url(obj, eid, area, ceiling, power):
     """Отрисовать брендовую планировку (площадь/высота/мощность) и вернуть её URL.
     План берём из LayoutPhoto оригинала. None при отсутствии данных/ошибке."""
@@ -146,11 +156,13 @@ def refresh():
         lots += 1
         eid = (obj.findtext("ExternalId") or "").strip()
         _set(obj, "Category", "freeAppointmentObjectRent")
-        # Срок сдачи текстом — дописываем в конец, ПОКА в описании из ProfitBase
-        # нет упоминания срока сдачи. Появится в профите — берём профит как есть.
+        # Описание: чистим запрещённые символы (& и т.п.) + срок сдачи текстом,
+        # ПОКА в описании из ProfitBase нет упоминания срока (появится в профите — берём как есть).
         de = obj.find("Description")
-        if de is not None and de.text and DEADLINE_DESC_MARKER not in de.text.lower():
-            de.text = de.text.rstrip() + "\n\n" + DEADLINE_DESC_LINE
+        if de is not None and de.text:
+            de.text = _clean_desc(de.text)
+            if DEADLINE_DESC_MARKER not in de.text.lower():
+                de.text = de.text.rstrip() + "\n\n" + DEADLINE_DESC_LINE
         bt = obj.find("BargainTerms")
         if bt is None:
             bt = ET.SubElement(obj, "BargainTerms")

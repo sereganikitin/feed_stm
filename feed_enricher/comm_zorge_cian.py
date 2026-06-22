@@ -39,6 +39,15 @@ ENR_DIR  = OUT_DIR / "enriched"     # обогащённые планировк�
 TPL_DIR  = OUT_DIR / "templates"
 PLANS_DIR = OUT_DIR / "plans"
 
+# Назначение → конкретная категория ЦИАН. Под конкретной категорией ЦИАН подставляет
+# назначение в ЗАГОЛОВОК (а не только в теги Speciality). Для прочих назначений точной
+# категории нет либо она требует доп. полей (Готовый бизнес — доходность/окупаемость),
+# поэтому они остаются «свободным назначением» (freeAppointmentObject) + тег Speciality.
+CIAN_CAT = {
+    "Офис": "office",
+    "Торговая площадь": "shoppingArea",
+}
+
 # (ExternalId в фиде, id помещения в ProfitBase, kind, FloorsCount дома, назначение)
 LISTINGS = [
     # ── Продажа: 1-5 ГАБ (готовый арендный бизнес) + Фитнес ──
@@ -196,7 +205,8 @@ def refresh():
         if not area:
             continue
         o = ET.SubElement(root, "object")
-        _T(o, "Category", "freeAppointmentObjectRent" if kind == "rent" else "freeAppointmentObjectSale")
+        base = CIAN_CAT.get(naz.strip(), "freeAppointmentObject")
+        _T(o, "Category", base + ("Rent" if kind == "rent" else "Sale"))
         _T(o, "ExternalId", ext_id)
         # Описание: приоритет — из нативного экспорта (Здания), затем API, затем генерим
         desc = _clean_desc(native_desc.get(pid) or it.get("description") or "")

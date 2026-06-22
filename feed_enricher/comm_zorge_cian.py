@@ -28,6 +28,9 @@ CEILING_FIELD = "pbcf_6218cf455c37f"   # «Высота потолка», м
 POWER_FIELD   = "pbcf_6218cf2f8b6e2"   # «Подводимая мощность, кВт»
 ADDRESS     = "Москва, ул. Зорге, дом 9Ак1"
 PHONE       = "+74952924193"
+# Нативный ЦИАН-экспорт коллеги: у отдельных Зданий там есть описания (в API-поле
+# description они пустые), подтягиваем их по ExternalId.
+NATIVE_CIAN_URL = "https://pb7828.profitbase.ru/export/cian/8a4445dbd945f674e5982af685553b8b?scheme=https"
 # Срок сдачи: дом сдан (3 квартал 2023). Quarter у ЦИАН — словом.
 DEADLINE    = {"quarter": "third", "year": "2023", "complete": "true"}
 OUT_DIR  = CACHE_DIR / "comm_zorge"
@@ -170,6 +173,17 @@ def refresh():
     if not key:
         return {"skipped": "PB_API_KEY не задан"}
     token = _auth(key)
+    # Описания Зданий из нативного экспорта (по ProfitBase-id) — в API-поле они пустые
+    native_desc = {}
+    try:
+        nroot = ET.fromstring(urllib.request.urlopen(NATIVE_CIAN_URL, timeout=90).read())
+        for no in nroot.iter("object"):
+            nid = (no.findtext("ExternalId") or "").strip()
+            nd = (no.findtext("Description") or "").strip()
+            if nid and nd:
+                native_desc[nid] = nd
+    except Exception as e:
+        print(f"[comm-zorge] native desc fetch failed: {e}")
     root = ET.Element("feed")
     ET.SubElement(root, "feed_version").text = "2"
     n_sale = n_rent = 0
@@ -181,7 +195,8 @@ def refresh():
         o = ET.SubElement(root, "object")
         _T(o, "Category", "freeAppointmentObjectRent" if kind == "rent" else "freeAppointmentObjectSale")
         _T(o, "ExternalId", ext_id)
-        desc = _clean_desc(it.get("description") or "")
+        # Описание: приоритет — из нативного экспорта (Здания), затем API, затем генерим
+        desc = _clean_desc(native_desc.get(pid) or it.get("description") or "")
         if len(desc) < 15:                          # ЦИАН требует 15–3000 симв.
             desc = _clean_desc(_build_desc(it, naz))
         _T(o, "Description", desc)

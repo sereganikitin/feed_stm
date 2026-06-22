@@ -120,6 +120,17 @@ def _clean_desc(s: str) -> str:
     return s
 
 
+_QWORD = {"1": "first", "2": "second", "3": "third", "4": "fourth"}
+
+
+def _parse_deadline(text):
+    """Достать «N квартал YYYY» из текста описания → (quarter-слово, year). None если нет."""
+    if not text:
+        return None
+    m = re.search(r"([1-4])\s*кварт\w*\s*(\d{4})", text, re.I)
+    return (_QWORD[m.group(1)], m.group(2)) if m else None
+
+
 def _enriched_url(obj, eid, area, ceiling, power):
     """Отрисовать брендовую планировку (площадь/высота/мощность) и вернуть её URL.
     План берём из LayoutPhoto оригинала. None при отсутствии данных/ошибке."""
@@ -156,14 +167,14 @@ def refresh():
         lots += 1
         eid = (obj.findtext("ExternalId") or "").strip()
         _set(obj, "Category", "freeAppointmentObjectRent")
-        # Описание: чистим запрещённые символы (& и т.п.); срок сдачи — авторитетно из
-        # конфига: убираем любую существующую строку «Срок сдачи…» (в т.ч. из ProfitBase)
-        # и ставим актуальную.
+        # Описание: чистим запрещённые символы (& и т.п.); срок сдачи берём ИЗ ProfitBase
+        # (если в описании уже есть упоминание срока — оставляем его), иначе дописываем
+        # строку из конфига как фолбэк.
         de = obj.find("Description")
         if de is not None and de.text:
             de.text = _clean_desc(de.text)
-            de.text = re.sub(r"\n*\s*Срок сдачи в эксплуатацию:[^\n]*", "", de.text).rstrip()
-            de.text = de.text + "\n\n" + DEADLINE_DESC_LINE
+            if DEADLINE_DESC_MARKER not in de.text.lower():
+                de.text = de.text.rstrip() + "\n\n" + DEADLINE_DESC_LINE
         bt = obj.find("BargainTerms")
         if bt is None:
             bt = ET.SubElement(obj, "BargainTerms")
@@ -174,15 +185,18 @@ def refresh():
         _set(bt, "PriceType", "all")
         _set(bt, "PaymentPeriod", "monthly")
 
-        # Срок сдачи объекта → Building/Deadline (квартал словом)
+        # Срок сдачи → Building/Deadline. Парсим «N квартал YYYY» из описания ProfitBase
+        # (единый источник), иначе фолбэк на конфиг DEADLINE.
+        parsed = _parse_deadline(de.text if (de is not None and de.text) else "")
+        q, y = parsed if parsed else (DEADLINE["quarter"], DEADLINE["year"])
         bld = obj.find("Building")
         if bld is None:
             bld = ET.SubElement(obj, "Building")
         dl = bld.find("Deadline")
         if dl is None:
             dl = ET.SubElement(bld, "Deadline")
-        _set(dl, "Quarter", DEADLINE["quarter"])
-        _set(dl, "Year", DEADLINE["year"])
+        _set(dl, "Quarter", q)
+        _set(dl, "Year", y)
         _set(dl, "IsComplete", DEADLINE["complete"])
 
         # Назначение помещения → Speciality. Приоритет: поле ProfitBase, иначе мэппинг.

@@ -50,6 +50,13 @@ NAZ_MAP = {  # значения = точные названия из справ�
     "17835272": "Кафе/ресторан",              # П-14
     "17835273": "Фитнес, Спортивный зал",     # П-17
 }
+# Точечные правки описания (ExternalId → [(было, стало), …]). Времянка на стороне
+# фида: исправляет ошибочный текст, который ввели в само описание ProfitBase.
+# Применяется ПОСЛЕ _clean_desc (т.е. '&' уже заменён на 'и'). Когда текст поправят
+# в ProfitBase — замена просто перестанет находить подстроку (станет no-op).
+DESC_FIX = {
+    "17835273": [("без отделки, формат Shell и Core", "с отделкой и авторским дизайном")],  # П-17
+}
 OUT_DIR  = CACHE_DIR / "comm_rent"
 OUT      = OUT_DIR / "b37-cian.xml"
 ENR_DIR  = OUT_DIR / "enriched"        # наши обогащённые планировки
@@ -173,6 +180,8 @@ def refresh():
         de = obj.find("Description")
         if de is not None and de.text:
             de.text = _clean_desc(de.text)
+            for old, new in DESC_FIX.get(eid, []):
+                de.text = de.text.replace(old, new)
             de.text = re.sub(r"\n*\s*Срок сдачи в эксплуатацию:[^\n]*", "", de.text).rstrip()
             de.text = de.text + "\n\n" + DEADLINE_DESC_LINE
         bt = obj.find("BargainTerms")

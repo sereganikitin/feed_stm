@@ -72,7 +72,7 @@ def _cards_cian(root):
             img = _txt(lp, "FullUrl") if lp is not None else ""
         cat = (o.findtext("Category") or "")
         rooms = o.findtext("FlatRoomsCount")
-        sp = o.find("Speciality")
+        sp = o.find("Specialty")
         spec = (next((s.text for s in sp.iter("String")), "") if sp is not None else "")
         if rooms:
             rmap = {"9": "Студия", "7": "Своб. планировка", "10": "6+ комнат"}

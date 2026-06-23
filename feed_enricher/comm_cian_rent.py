@@ -205,13 +205,18 @@ def refresh():
         _set(dl, "Year", DEADLINE["year"])
         _set(dl, "IsComplete", DEADLINE["complete"])
 
-        # Назначение помещения → Speciality. Приоритет: поле ProfitBase, иначе мэппинг.
+        # Назначение помещения → Specialty. Приоритет: поле ProfitBase, иначе мэппинг.
         # Значения через запятую/точку с запятой = несколько назначений.
+        # ВАЖНО: правильный тег ЦИАН — Specialty (амер. написание). Нативный экспорт
+        # ProfitBase отдаёт его как Speciality (с лишней «i») — ЦИАН такой игнорирует,
+        # поэтому старый тег удаляем и пишем корректный.
+        for _old in obj.findall("Speciality"):
+            obj.remove(_old)
         naz = f.get("naz") or NAZ_MAP.get(eid)
         if naz:
-            sp = obj.find("Speciality")
+            sp = obj.find("Specialty")
             if sp is None:
-                sp = ET.SubElement(obj, "Speciality")
+                sp = ET.SubElement(obj, "Specialty")
             types = sp.find("Types")
             if types is None:
                 types = ET.SubElement(sp, "Types")

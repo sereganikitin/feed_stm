@@ -40,9 +40,9 @@ TPL_DIR  = OUT_DIR / "templates"
 PLANS_DIR = OUT_DIR / "plans"
 
 # Назначение → конкретная категория ЦИАН. Под конкретной категорией ЦИАН подставляет
-# назначение в ЗАГОЛОВОК (а не только в теги Speciality). Для прочих назначений точной
+# назначение в ЗАГОЛОВОК (а не только в теги Specialty). Для прочих назначений точной
 # категории нет либо она требует доп. полей (Готовый бизнес — доходность/окупаемость),
-# поэтому они остаются «свободным назначением» (freeAppointmentObject) + тег Speciality.
+# поэтому они остаются «свободным назначением» (freeAppointmentObject) + тег Specialty.
 CIAN_CAT = {
     "Офис": "office",
     "Торговая площадь": "shoppingArea",
@@ -246,7 +246,7 @@ def refresh():
             _T(bt, "PriceType", "all")
             n_sale += 1
         # Назначение (задано в LISTINGS по логике клиента)
-        sp = ET.SubElement(o, "Speciality"); types = ET.SubElement(sp, "Types")
+        sp = ET.SubElement(o, "Specialty"); types = ET.SubElement(sp, "Types")
         for v in str(naz).replace(";", ",").split(","):
             v = v.strip()
             if v:

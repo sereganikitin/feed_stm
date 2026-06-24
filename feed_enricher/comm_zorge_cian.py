@@ -47,6 +47,12 @@ CIAN_CAT = {
     "Офис": "office",
     "Торговая площадь": "shoppingArea",
 }
+# Категория по КОНКРЕТНОМУ лоту (перебивает CIAN_CAT). Для отдельно стоящих зданий —
+# building (→ buildingSale, «Отдельно стоящее здание»). Только целые строения!
+CAT_BY_LOT = {
+    "16890194": "building",   # Здание 1 «Велопрокат»
+    "16890195": "building",   # Здание 2 «Офис продаж»
+}
 
 # (ExternalId в фиде, id помещения в ProfitBase, kind, FloorsCount дома, назначение)
 LISTINGS = [
@@ -205,7 +211,7 @@ def refresh():
         if not area:
             continue
         o = ET.SubElement(root, "object")
-        base = CIAN_CAT.get(naz.strip(), "freeAppointmentObject")
+        base = CAT_BY_LOT.get(ext_id) or CIAN_CAT.get(naz.strip(), "freeAppointmentObject")
         _T(o, "Category", base + ("Rent" if kind == "rent" else "Sale"))
         _T(o, "ExternalId", ext_id)
         # Описание: приоритет — из нативного экспорта (Здания), затем API, затем генерим

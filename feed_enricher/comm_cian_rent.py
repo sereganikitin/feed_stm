@@ -57,6 +57,12 @@ NAZ_MAP = {  # значения = точные названия из справ�
 DESC_FIX = {
     "17835273": [("без отделки, формат Shell и Core", "с отделкой и авторским дизайном")],  # П-17
 }
+# Категория ЦИАН по лоту: торговые (Торговля/Услуги) → shoppingArea («Торговая площадь»),
+# остальные (кафе, фитнес) — freeAppointmentObject («Свободное назначение»; своей категории нет).
+CAT_BY_LOT = {
+    "17835265": "shoppingArea",   # П4  Торговля/Услуги
+    "17835266": "shoppingArea",   # П8  Торговля/Услуги
+}
 OUT_DIR  = CACHE_DIR / "comm_rent"
 OUT      = OUT_DIR / "b37-cian.xml"
 ENR_DIR  = OUT_DIR / "enriched"        # наши обогащённые планировки
@@ -173,7 +179,7 @@ def refresh():
     for obj in root.iter("object"):
         lots += 1
         eid = (obj.findtext("ExternalId") or "").strip()
-        _set(obj, "Category", "freeAppointmentObjectRent")
+        _set(obj, "Category", CAT_BY_LOT.get(eid, "freeAppointmentObject") + "Rent")
         # Описание: чистим запрещённые символы (& и т.п.); срок сдачи — АВТОРИТЕТНО из
         # конфига (зафиксирован): убираем любую существующую строку «Срок сдачи…»
         # (в т.ч. просочившуюся из ProfitBase) и ставим актуальную.

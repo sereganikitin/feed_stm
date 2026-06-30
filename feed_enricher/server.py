@@ -380,6 +380,21 @@ def serve_feed_yandex(slug: str):
     return send_file(p, mimetype="application/xml")
 
 
+@app.route("/feed/<slug>-domclick.xml")
+def serve_feed_domclick(slug: str):
+    # ДомКлик принимает формат YRL (Yandex Realty) — тот же, что наш Яндекс-фид.
+    # Отдаём его же; при отличиях в требованиях ДомКлик сделаем отдельный ассемблер.
+    if slug not in PROJECTS:
+        abort(404)
+    dirs = project_dirs(slug)
+    p = dirs["feeds"] / "yandex.xml"
+    if not p.exists():
+        refresh_project(slug)
+    if not p.exists():
+        abort(503)
+    return send_file(p, mimetype="application/xml")
+
+
 @app.route("/enriched/<slug>/<name>")
 def serve_plan(slug: str, name: str):
     if slug not in PROJECTS:

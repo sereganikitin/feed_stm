@@ -142,7 +142,8 @@ def assemble_avito_feed(slug: str, lots: list[FeedLot], out_path: Path) -> Path:
     return out_path
 
 
-def enrich_pb_avito_feed(slug: str, avito_xml: bytes, out_path: Path) -> Path:
+def enrich_pb_avito_feed(slug: str, avito_xml: bytes, out_path: Path,
+                         rooms_override: dict = None) -> Path:
     """Вариант A: берём ГОТОВЫЙ Авито-фид из ProfitBase и подменяем только обложку.
 
     Для каждого <Ad>:
@@ -213,8 +214,11 @@ def enrich_pb_avito_feed(slug: str, avito_xml: bytes, out_path: Path) -> Path:
             ht.text = _HOUSE_TYPE_FIX[(ht.text or "").strip()]
 
         # «Количество комнат»: Авито отклоняет, когда поле (евро-счёт ProfitBase)
-        # расходится с описанием. Берём число из описания (по спальням) и проставляем.
-        rv = rooms_from_description(ad.findtext("Description"))
+        # расходится с фактом. Приоритет — наша исправленная комнатность (lot.rooms,
+        # учитывает европланировки), иначе — число из описания (по спальням).
+        rv = (rooms_override or {}).get(iid)
+        if rv is None:
+            rv = rooms_from_description(ad.findtext("Description"))
         if rv is not None:
             rm = ad.find("Rooms")
             if rm is None:

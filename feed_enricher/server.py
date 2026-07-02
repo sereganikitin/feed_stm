@@ -9,6 +9,7 @@ Endpoints:
 """
 from pathlib import Path
 import os, re, json, threading, time
+import xml.etree.ElementTree as ET
 import requests
 from flask import Flask, send_file, abort, jsonify
 
@@ -17,7 +18,7 @@ from .config import (
     SERVE_HOST, SERVE_PORT, REFRESH_INTERVAL_HOURS,
     PB_API_TOKEN, PB_UPLOAD_URL,
 )
-from .parser import download_feed, parse_feed
+from .parser import download_feed, parse_feed, ROOMS_MAP
 from .enricher import enrich_lot, installment_values
 from .assembler import assemble_feed
 from .assembler_avito import assemble_avito_feed, enrich_pb_avito_feed
@@ -87,6 +88,62 @@ def _sync_cian_photos(slug, dirs):
         print(f"[{slug}] cian yadisk sync failed: {e}")
 
 
+_EURO_TTL = 600
+_euro_cache: dict = {}   # url -> (monotonic_ts, set(ExternalId))
+
+
+def _euro_layout_ids(url: str) -> set:
+    """ExternalId (=internal-id) лотов с европланировкой из Яндекс-выгрузки ProfitBase."""
+    now = time.monotonic()
+    hit = _euro_cache.get(url)
+    if hit and now - hit[0] < _EURO_TTL:
+        return hit[1]
+    root = ET.fromstring(download_feed(url))
+    ln = lambda t: t.split("}")[-1]
+    ids = set()
+    for o in root.iter():
+        if ln(o.tag) != "offer":
+            continue
+        iid = o.get("internal-id")
+        if not iid:
+            continue
+        for c in o:
+            if ln(c.tag) == "euro-layout" and (c.text or "").strip() == "1":
+                ids.add(iid)
+                break
+    _euro_cache[url] = (now, ids)
+    return ids
+
+
+def _apply_euro_rooms(slug: str, lots: list):
+    """Европланировки: ProfitBase считает кухню-гостиную комнатой (euro=N), а классифайды
+    ждут по спальням (N−1) — иначе площадка отклоняет («трёшка вместо евро 2+1»). Флаг
+    euro-layout берём из Яндекс-выгрузки ProfitBase, комнатность = FlatRoomsCount−1.
+    Правит lot.rooms → применяется во ВСЕХ фидах и на картинке."""
+    url = (PROJECTS.get(slug) or {}).get("euro_source_url")
+    if not url:
+        return
+    try:
+        ids = _euro_layout_ids(url)
+    except Exception as e:
+        print(f"[{slug}] euro-source недоступен, комнатность не трогаем: {e}")
+        return
+    n = 0
+    for lot in lots:
+        if lot.internal_id not in ids or lot.raw_xml is None:
+            continue
+        try:
+            code = int((lot.raw_xml.findtext("FlatRoomsCount") or "0").strip())
+        except ValueError:
+            continue
+        human = ROOMS_MAP.get(code, code)
+        if isinstance(human, int) and human >= 2:   # студии/своб.планировку не трогаем
+            lot.rooms = human - 1
+            n += 1
+    if n:
+        print(f"[{slug}] европланировки: комнатность −1 у {n} лотов")
+
+
 def resync_views(slug: str):
     """Часовой ресинк: зеркалит виды И фото ЦИАН из ЯД, пересобирает фиды (без перерисовки планировок)."""
     proj = PROJECTS.get(slug)
@@ -99,12 +156,14 @@ def resync_views(slug: str):
     with _lock:
         raw = cian.read_bytes()
         lots = parse_feed(raw)
+        _apply_euro_rooms(slug, lots)
         _sync_views(slug, d, lots)
         _sync_cian_photos(slug, d)
         assemble_feed(slug, raw, lots, d["feeds"] / "feed.xml")
         av = d["feeds"] / "original_avito.xml"
         if proj.get("pb_avito_feed_url") and av.exists():
-            enrich_pb_avito_feed(slug, av.read_bytes(), d["feeds"] / "avito.xml")
+            enrich_pb_avito_feed(slug, av.read_bytes(), d["feeds"] / "avito.xml",
+                                 rooms_override={l.internal_id: l.rooms for l in lots})
         if proj.get("yandex_building_id"):
             coords = coords_from_avito(av.read_bytes()) if av.exists() else {}
             now = time.strftime("%Y-%m-%dT%H:%M:%S+03:00")
@@ -153,6 +212,7 @@ def refresh_project(slug: str) -> dict:
     with _lock:
         original = download_feed(proj["pb_feed_url"], dirs["feeds"] / "original.xml")
         lots = parse_feed(original)
+        _apply_euro_rooms(slug, lots)
         ok, fail = 0, 0
         for lot in lots:
             if not (lot.plan_url and lot.price and lot.area_total):
@@ -186,7 +246,8 @@ def refresh_project(slug: str) -> dict:
                 except Exception as e:
                     print(f"[{slug}] yadisk sync failed: {e}")
             avito_src = download_feed(proj["pb_avito_feed_url"], dirs["feeds"] / "original_avito.xml")
-            enrich_pb_avito_feed(slug, avito_src, out_avito)
+            enrich_pb_avito_feed(slug, avito_src, out_avito,
+                                 rooms_override={l.internal_id: l.rooms for l in lots})
         else:
             assemble_avito_feed(slug, lots, out_avito)
 

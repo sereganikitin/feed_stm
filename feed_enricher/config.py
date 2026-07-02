@@ -17,6 +17,8 @@ PROJECTS = {
     "zorge9": {
         "name": "Зорге 9",
         "pb_feed_url": "https://pb7828.profitbase.ru/export/cian/52f269befad84358fb0c88a64dc2770c?scheme=https",
+        # Флаг европланировки → комнатность по спальням (FlatRoomsCount−1). См. b37.
+        "euro_source_url": "https://pb7828.profitbase.ru/export/profitbase_xml/1ff0788c09898afd046dadeb3501e901?scheme=https",
         "figma_template_url": "https://static.tildacdn.com/tild3130-3231-4832-a464-623331636437/plan-z9.jpg",
         "template_ext": "jpg",
         # ─── Параметры выгрузки в формате Авито ───
@@ -117,6 +119,13 @@ PROJECTS = {
         "pb_feed_url": os.environ.get(
             "PB_FEED_URL_B37",
             "https://pb7828.profitbase.ru/export/cian/2c8842a29267697d479e01d8808ed479?scheme=https",
+        ),
+        # Источник флага европланировки (в CIAN-экспорте его нет). Яндекс-формат ProfitBase
+        # содержит <euro-layout>; для euro-лотов комнатность = FlatRoomsCount−1 (ProfitBase
+        # считает кухню-гостиную комнатой, классифайды ждут по спальням).
+        "euro_source_url": os.environ.get(
+            "PB_EURO_SOURCE_B37",
+            "https://pb7828.profitbase.ru/export/profitbase_xml/1ff0788c09898afd046dadeb3501e901?scheme=https",
         ),
         "figma_template_url": os.environ.get(
             "FIGMA_TEMPLATE_URL_B37",

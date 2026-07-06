@@ -241,7 +241,7 @@ def refresh_project(slug: str) -> dict:
                     from .config import excluded_photos
                     n = len(sync_public_folder(
                         extra_cfg["yadisk_public_key"], extra_cfg["yadisk_path"], dirs["extra"],
-                        exclude=excluded_photos(slug, "avito")))
+                        mirror=True, exclude=excluded_photos(slug, "avito")))
                     print(f"[{slug}] extra photos synced: {n}")
                 except Exception as e:
                     print(f"[{slug}] yadisk sync failed: {e}")
@@ -259,7 +259,7 @@ def refresh_project(slug: str) -> dict:
                     from .config import excluded_photos
                     n = len(sync_public_folder(
                         yx_cfg["yadisk_public_key"], yx_cfg["yadisk_path"], dirs["extra_yandex"],
-                        exclude=excluded_photos(slug, "yandex")))
+                        mirror=True, exclude=excluded_photos(slug, "yandex")))
                     print(f"[{slug}] yandex photos synced: {n}")
                 except Exception as e:
                     print(f"[{slug}] yandex yadisk sync failed: {e}")

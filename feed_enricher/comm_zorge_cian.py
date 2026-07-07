@@ -228,6 +228,8 @@ def refresh():
         bld = ET.SubElement(o, "Building")
         _T(bld, "Name", "Зорге 9")
         _T(bld, "FloorsCount", floors)
+        if base == "building":   # категория «Отдельно стоящее здание» требует площадь здания
+            _T(bld, "TotalArea", _num(area))
         dl = ET.SubElement(bld, "Deadline")
         _T(dl, "Quarter", DEADLINE["quarter"])
         _T(dl, "Year", DEADLINE["year"])

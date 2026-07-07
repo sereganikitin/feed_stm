@@ -27,6 +27,15 @@ NAZ_FIELD     = "pbcf_61e947e1daaa1"   # «Назначение помещени
 CEILING_FIELD = "pbcf_6218cf455c37f"   # «Высота потолка», м
 POWER_FIELD   = "pbcf_6218cf2f8b6e2"   # «Подводимая мощность, кВт»
 ADDRESS     = "Москва, ул. Зорге, дом 9Ак1"
+# Пер-лотовый адрес (строение). Отдельно стоящие здания и Йога-корпус физически в
+# других строениях, иначе ЦИАН ставит их на карте по общему 9Ак1.
+ADDR_BY_LOT = {
+    "16890194": "Москва, ул. Зорге, дом 9Ас5",   # здание Велопрокат (371.3)
+    "16890195": "Москва, ул. Зорге, дом 9Ас4",   # здание Офис продаж (894.1)
+    "11242968": "Москва, ул. Зорге, дом 9Ас8",   # Йога 2 эт
+    "11242974": "Москва, ул. Зорге, дом 9Ас8",   # Йога 3 эт
+    "11242998": "Москва, ул. Зорге, дом 9Ас8",   # Йога 4 эт
+}
 PHONE       = "+74952924193"
 # Нативный ЦИАН-экспорт коллеги: у отдельных Зданий там есть описания (в API-поле
 # description они пустые), подтягиваем их по ExternalId.
@@ -135,7 +144,7 @@ def _clean_desc(s: str) -> str:
     return s.strip()
 
 
-def _build_desc(it, naz):
+def _build_desc(it, naz, addr=ADDRESS):
     """Описание из данных помещения (если в ProfitBase пусто) — ЦИАН требует 15–3000 симв."""
     area = (it.get("area", {}) or {}).get("area_total")
     ceiling = _cf(it, CEILING_FIELD)
@@ -157,7 +166,7 @@ def _build_desc(it, naz):
     parts = [f"{head} в ЖК «Зорге 9»."]
     if spec:
         parts.append((", ".join(spec)).capitalize() + ".")
-    parts.append(f"Адрес: {ADDRESS}. Дом сдан (3 квартал 2023 года).")
+    parts.append(f"Адрес: {addr}. Дом сдан (3 квартал 2023 года).")
     return " ".join(parts)
 
 
@@ -215,11 +224,12 @@ def refresh():
         _T(o, "Category", base + ("Rent" if kind == "rent" else "Sale"))
         _T(o, "ExternalId", ext_id)
         # Описание: приоритет — из нативного экспорта (Здания), затем API, затем генерим
+        addr = ADDR_BY_LOT.get(ext_id, ADDRESS)
         desc = _clean_desc(native_desc.get(pid) or it.get("description") or "")
         if len(desc) < 15:                          # ЦИАН требует 15–3000 симв.
-            desc = _clean_desc(_build_desc(it, naz))
+            desc = _clean_desc(_build_desc(it, naz, addr))
         _T(o, "Description", desc)
-        _T(o, "Address", ADDRESS)
+        _T(o, "Address", addr)
         ph = ET.SubElement(o, "Phones"); psc = ET.SubElement(ph, "PhoneSchema")
         _T(psc, "CountryCode", "+7"); _T(psc, "Number", PHONE.lstrip("+7"))
         _T(o, "TotalArea", _num(area))

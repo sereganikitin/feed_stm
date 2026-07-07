@@ -11,6 +11,26 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# Назначение (Specialty) в ЦИАН-фиде: поддержка ЦИАН требует ТЕХНИЧЕСКИЙ ID из
+# справочника commercial-possible-appointments.xml, а не русскую подпись — иначе
+# по фильтрам «Общепит»/«Фитнес» и т.п. лоты не находятся. Подпись → id.
+SPECIALTY_ID = {
+    "Офис":               "office",
+    "Торговая площадь":   "shoppingFloorSpace",
+    "Склад":              "warehouse",
+    "Производство":       "production",
+    "Арендный бизнес":    "rentalBusiness",
+    "Фитнес":             "fitnessCentre",
+    "Спортзал":           "gym",
+    "Спортивный зал":     "gymHall",
+    "Общепит":            "publicCatering",
+    "Кафе/ресторан":      "cafe",
+    "Ресторан":           "restaurant",
+    "Торговля":           "trading",
+    "Услуги":             "services",
+    "Свободное назначение": "flexiblePurpose",
+}
+
 # ═══ Проекты (ЖК) ═══
 # Ключ slug используется в URL: /feed/<slug>.xml, /enriched/<slug>/<id>.png
 PROJECTS = {

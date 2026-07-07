@@ -16,7 +16,7 @@ import urllib.request
 import urllib.error
 import xml.etree.ElementTree as ET
 
-from .config import (CACHE_DIR, PUBLIC_BASE_URL, file_ver,
+from .config import (CACHE_DIR, PUBLIC_BASE_URL, file_ver, SPECIALTY_ID,
                      COMMERCIAL_TEMPLATE_ZORGE_URL, COMMERCIAL_TEMPLATE_ZORGE_EXT,
                      COMMERCIAL_LAYOUT_ZORGE)
 from .enricher import enrich_commercial
@@ -258,7 +258,7 @@ def refresh():
         for v in str(naz).replace(";", ",").split(","):
             v = v.strip()
             if v:
-                ET.SubElement(types, "String").text = v
+                ET.SubElement(types, "String").text = SPECIALTY_ID.get(v, v)
         # Обогащённая планировка — обложка; затем фото из planImages
         imgs = [im.get("source") for im in (it.get("planImages") or [])
                 if im.get("source") and not im.get("technical")]

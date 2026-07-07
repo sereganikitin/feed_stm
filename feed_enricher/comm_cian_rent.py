@@ -22,7 +22,7 @@ import urllib.request
 import urllib.error
 import xml.etree.ElementTree as ET
 
-from .config import (CACHE_DIR, PUBLIC_BASE_URL, file_ver,
+from .config import (CACHE_DIR, PUBLIC_BASE_URL, file_ver, SPECIALTY_ID,
                      COMMERCIAL_TEMPLATE_URL, COMMERCIAL_TEMPLATE_EXT, COMMERCIAL_LAYOUT)
 from .enricher import enrich_commercial
 
@@ -231,7 +231,7 @@ def refresh():
             for val in re.split(r"[;,]", naz):
                 val = val.strip()
                 if val:
-                    ET.SubElement(types, "String").text = val
+                    ET.SubElement(types, "String").text = SPECIALTY_ID.get(val, val)
 
         # Обогащённая планировка — ПЕРВОЙ картинкой (обложка)
         area = (obj.findtext("TotalArea") or "").strip()

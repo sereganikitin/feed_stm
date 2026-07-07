@@ -144,20 +144,32 @@ def sync_public_folder(public_key: str, path: str, dest_dir: Path,
     exclude = set(exclude or ())
     saved: list[Path] = []
     yd_names: list[str] = []
+    # Хэши содержимого файлов в ЯД (md5). Нужны, чтобы ловить ЗАМЕНУ фото под тем же
+    # именем — иначе `out.exists()` пропускает скачивание и остаётся старая картинка.
+    hashes_path = dest_dir / "_src_hashes.json"
+    try:
+        hashes = json.loads(hashes_path.read_text("utf-8"))
+    except Exception:
+        hashes = {}
     for it in list_public_images(public_key, path):
         out = dest_dir / (Path(it["name"]).stem + ".jpg")
         if out.name in exclude:                    # чёрный список — не качаем, удаляем если есть
             out.unlink(missing_ok=True)
+            hashes.pop(out.name, None)
             continue
         yd_names.append(out.name)
-        if not out.exists():
+        sig = it.get("md5") or it.get("modified") or ""   # содержимое файла в ЯД
+        if not out.exists() or hashes.get(out.name) != sig:   # новый ЛИБО заменён в ЯД
             href = _api_get("/download", {"public_key": public_key, "path": it["path"]})["href"]
             req = urllib.request.Request(href, headers={"User-Agent": "feed-enricher"})
             with _open(req, timeout=180) as r:
                 raw = r.read()
             save_resized_jpeg(raw, out, max_side=max_side, quality=quality)
+            hashes[out.name] = sig
             time.sleep(0.4)   # не долбим API Яндекс.Диска — иначе 429
         saved.append(out)
+    hashes = {k: v for k, v in hashes.items() if k in set(yd_names)}
+    hashes_path.write_text(json.dumps(hashes, ensure_ascii=False), "utf-8")
     if mirror:
         manifest = dest_dir / "_src.json"
         try:

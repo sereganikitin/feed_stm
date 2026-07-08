@@ -36,6 +36,9 @@ ADDR_BY_LOT = {
     "11242974": "Москва, ул. Зорге, дом 9Ас8",   # Йога 3 эт
     "11242998": "Москва, ул. Зорге, дом 9Ас8",   # Йога 4 эт
 }
+# НДС: без явного VatType ЦИАН показывает «НДС включён». usn = «НДС не облагается»
+# (убирает строку НДС). Если по факту НДС сверху цены — сменить на "notIncluded".
+VAT_TYPE = "usn"
 PHONE       = "+74952924193"
 # Нативный ЦИАН-экспорт коллеги: у отдельных Зданий там есть описания (в API-поле
 # description они пустые), подтягиваем их по ExternalId.
@@ -256,6 +259,7 @@ def refresh():
             _T(bt, "currency", "rur")
             _T(bt, "PriceType", "all")
             _T(bt, "PaymentPeriod", "monthly")
+            _T(bt, "VatType", VAT_TYPE)   # правило: аренда — без НДС
             n_rent += 1
         else:
             price = (it.get("price", {}) or {}).get("value")
@@ -263,6 +267,9 @@ def refresh():
             _T(bt, "currency", "rur")
             _T(bt, "PriceType", "all")
             n_sale += 1
+        # Комиссия 0 у всех лотов (убрать дефолт ЦИАН «Комиссия с арендатора 100%»).
+        _T(bt, "ClientFee", "0")
+        _T(bt, "AgentFee", "0")
         # Назначение (задано в LISTINGS по логике клиента)
         sp = ET.SubElement(o, "Specialty"); types = ET.SubElement(sp, "Types")
         for v in str(naz).replace(";", ",").split(","):

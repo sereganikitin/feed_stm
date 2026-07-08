@@ -199,6 +199,10 @@ def refresh():
         _set(bt, "currency", "rur")
         _set(bt, "PriceType", "all")
         _set(bt, "PaymentPeriod", "monthly")
+        # Правило: аренда — без НДС + без комиссии.
+        _set(bt, "VatType", "usn")       # перебиваем notIncluded из нативного экспорта
+        _set(bt, "ClientFee", "0")
+        _set(bt, "AgentFee", "0")
 
         # Срок сдачи → Building/Deadline — АВТОРИТЕТНО из конфига DEADLINE (зафиксирован).
         bld = obj.find("Building")

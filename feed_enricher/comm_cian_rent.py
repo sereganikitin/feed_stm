@@ -199,8 +199,9 @@ def refresh():
         _set(bt, "currency", "rur")
         _set(bt, "PriceType", "all")
         _set(bt, "PaymentPeriod", "monthly")
-        # Правило: аренда — без НДС + без комиссии.
-        _set(bt, "VatType", "usn")       # перебиваем notIncluded из нативного экспорта
+        # Правило: аренда — без НДС + без комиссии. notIncluded — как приходило из
+        # нативного экспорта (отображалось верно); usn ЦИАН показывает как «УСН».
+        _set(bt, "VatType", "notIncluded")
         _set(bt, "ClientFee", "0")
         _set(bt, "AgentFee", "0")
 

@@ -152,7 +152,7 @@ def _gen_domclick(slug, proj, coords, feeds_dir):
     url = proj.get("pb_domclick_url")
     if url:
         try:
-            enrich_domclick_feed(slug, download_feed(url), feeds_dir / "domclick.xml")
+            enrich_domclick_feed(slug, download_feed(url), feeds_dir / "domclick.xml", proj)
         except Exception as e:
             print(f"[{slug}] domclick (enrich) failed: {e}")
         return

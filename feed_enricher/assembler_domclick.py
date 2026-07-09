@@ -112,35 +112,79 @@ def _house(o):
             _gv(h, "built-year"), _gv(h, "ready-quarter"), _gv(h, "building-state"))
 
 
-def enrich_domclick_feed(slug: str, pbdc_bytes: bytes, out_path: Path) -> Path:
-    """Взять ГОТОВЫЙ DomClick-экспорт ProfitBase (правильные id ЖК/корпусов, валидный
-    формат, полный контент ЖК) и подменить: планировки квартир → наши брендовые
-    (/enriched по flat_id) и фото ЖК → наш набор с Я.Диска (extra_yandex).
-    Всё остальное (id, описание, офис продаж, застройщик, поля квартир) — из ProfitBase."""
+def _addmissing(el, tag, val):
+    """Добавить тег в элемент, если его нет и значение непустое."""
+    if val and el.find(tag) is None:
+        ET.SubElement(el, tag).text = str(val)
+
+
+def enrich_domclick_feed(slug: str, pbdc_bytes: bytes, out_path: Path, cfg: dict = None) -> Path:
+    """Взять ГОТОВЫЙ DomClick-экспорт ProfitBase (правильные id ЖК/корпусов, контент)
+    и: подменить планировки → наши брендовые (/enriched по flat_id) и фото ЖК → наш
+    набор с ЯД; ДОБИТЬ то, что режет валидатор ДомКлик: building-поля (floors_ready,
+    building_phase, address, координаты, лифты), маппинг window_view в словарь,
+    непустой description (описание ЖК из конфига + удаление акций с пустым описанием)."""
+    cfg = cfg or {}
+    dc = cfg.get("domclick", {}) or {}
     root = ET.fromstring(pbdc_bytes)
     edir = project_dirs(slug)["enriched"]
     pdir = project_dirs(slug)["extra_yandex"]
     our_imgs = [f"{PUBLIC_BASE_URL}/extra_yandex/{slug}/{file_ver(f)}/{f.name}"
                 for f in sorted(pdir.glob("*.jpg"))[:20]]
     for cx in root.findall("complex"):
+        clat, clon, caddr = cx.findtext("latitude"), cx.findtext("longitude"), cx.findtext("address")
         imgs = cx.find("images")           # фото ЖК → наш набор с ЯД
         if imgs is not None and our_imgs:
             for im in list(imgs):
                 imgs.remove(im)
             for u in our_imgs:
                 ET.SubElement(imgs, "image").text = u
-        for fl in cx.findall(".//flat"):   # планировки → наши брендовые
+        # описание ЖК: если в экспорте пусто/нет — из конфига
+        fb = (dc.get("description_main") or {}).get("text")
+        if fb:
+            dm = cx.find("description_main")
+            if dm is None:
+                dm = ET.SubElement(cx, "description_main")
+            dmt = dm.find("text")
+            if dmt is None:
+                dmt = ET.SubElement(dm, "text")
+            if not (dmt.text or "").strip():
+                dmt.text = fb
+        # акции с пустым <description> валидатор режет — убираем такие акции
+        disc = cx.find("discounts")
+        if disc is not None:
+            for d in list(disc):
+                dd = d.find("description")
+                if dd is not None and not (dd.text or "").strip():
+                    disc.remove(d)
+        # building: добить обязательные для валидатора поля
+        for b in cx.findall("buildings/building"):
+            floors = b.findtext("floors")
+            _addmissing(b, "floors_ready", floors)
+            _addmissing(b, "building_phase", "1")
+            _addmissing(b, "address", caddr)
+            _addmissing(b, "latitude", clat)
+            _addmissing(b, "longitude", clon)
+            _addmissing(b, "passenger_lifts_count", "1")
+            _addmissing(b, "cargo_lifts_count", "1")
+        for fl in cx.findall(".//flat"):
             fid = (fl.findtext("flat_id") or "").strip()
-            png = edir / f"{fid}.png"
-            if not png.exists():
-                continue
-            plans = fl.find("plans")
-            if plans is None:
-                plans = ET.SubElement(fl, "plans")
-            for p in list(plans):
-                plans.remove(p)
-            ET.SubElement(plans, "plan").text = \
-                f"{PUBLIC_BASE_URL}/enriched/{slug}/{file_ver(png)}/{fid}.png"
+            png = edir / f"{fid}.png"       # планировки → наши брендовые
+            if png.exists():
+                plans = fl.find("plans")
+                if plans is None:
+                    plans = ET.SubElement(fl, "plans")
+                for p in list(plans):
+                    plans.remove(p)
+                ET.SubElement(plans, "plan").text = \
+                    f"{PUBLIC_BASE_URL}/enriched/{slug}/{file_ver(png)}/{fid}.png"
+            wv = fl.find("window_view")     # сырой вид → словарь ДомКлик
+            if wv is not None:
+                m = _wview(wv.text)
+                if m:
+                    wv.text = m
+                else:
+                    fl.remove(wv)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     ET.ElementTree(root).write(out_path, encoding="utf-8", xml_declaration=True)
     return out_path

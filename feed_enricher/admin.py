@@ -646,6 +646,24 @@ _CSS = """
  .tile.add{display:flex;align-items:center;justify-content:center;font-size:34px;color:#94a3b8;cursor:pointer;border-style:dashed}
  .tile.dragover{outline:3px solid #2563eb;outline-offset:-3px}
  .tile.dragging{opacity:.4}
+ /* ── дашборд: карточки проектов ── */
+ .hero{background:linear-gradient(135deg,#eef4ff,#f7f9fc);border:1px solid #e2e8f5}
+ .hero p{margin:0 0 6px;font-size:15px;line-height:1.5}
+ .legend{display:flex;gap:22px;flex-wrap:wrap;font-size:14px;color:#475569;margin-top:10px}
+ .btn.big{padding:11px 22px;font-size:16px;font-weight:600}
+ .pcard{background:#fff;border:1px solid #e6ebf2;border-radius:14px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.06);margin-bottom:20px}
+ .pcard-head{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 22px;border-bottom:1px solid #eef1f5}
+ .pcard-title{font-size:21px;font-weight:700}
+ .pcard-sub{color:#64748b;font-size:13px;margin-top:3px}
+ .feeds{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:12px;padding:18px 22px}
+ .feed{display:block;border:1px solid #e7ebf1;border-left:5px solid var(--c,#2563eb);border-radius:10px;padding:12px 14px;color:#1c2430}
+ .feed{transition:box-shadow .12s ease,transform .12s ease}
+ .feed:hover{box-shadow:0 5px 16px rgba(37,99,235,.14);transform:translateY(-2px);text-decoration:none}
+ .feed .plat{font-weight:600;font-size:13.5px;min-height:34px}
+ .feed .cnt{font-size:28px;font-weight:800;line-height:1;margin:6px 0 4px}
+ .feed .lnk{font-size:12px;color:#2563eb}
+ .feed.empty{opacity:.5}
+ .pcard-foot{display:flex;gap:24px;flex-wrap:wrap;align-items:center;padding:13px 22px;background:#fafbfd;border-top:1px solid #eef1f5;font-size:14px;color:#475569}
 </style>
 """
 
@@ -672,27 +690,54 @@ _LOGIN_HTML = _CSS + """<title>Вход — фиды</title><h1>Панель у�
 </div>"""
 
 _DASH_HTML = _CSS + """<title>Фиды</title>
-<h1>Фиды квартир — панель</h1>""" + _FLASH + """
-<div class=card>
- <table>
-  <tr><th>Проект</th><th>ЦИАН</th><th>Авито</th><th>Яндекс</th><th>Я.Поиск</th><th>ДомКлик</th><th>Фото А/Я/Ц</th><th>Виды</th><th>Обновлено</th><th></th></tr>
-  {% for r in rows %}
-  <tr>
-   <td><b>{{r.name}}</b><div class=muted>{{r.slug}}</div></td>
-   <td>{{r.cian}} <div class=muted><a href="{{base}}/feed/{{r.slug}}.xml" target=_blank>xml</a></div></td>
-   <td>{{r.avito}} <div class=muted><a href="{{base}}/feed/{{r.slug}}-avito.xml" target=_blank>xml</a></div></td>
-   <td>{{r.yandex}} <div class=muted><a href="{{base}}/feed/{{r.slug}}-yandex.xml" target=_blank>xml</a></div></td>
-   <td>{{r.yandex_realty}} <div class=muted><a href="{{base}}/feed/{{r.slug}}-yandex-realty.xml" target=_blank>xml</a></div></td>
-   <td>{{r.domclick}} <div class=muted><a href="{{base}}/feed/{{r.slug}}-domclick.xml" target=_blank>xml</a></div></td>
-   <td>{{r.photos}} / {{r.photos_y}} / {{r.photos_c}}</td>
-   <td>{{r.views}} <div class=muted><a href="{{url_for('admin.views_page',slug=r.slug)}}">список</a></div></td>
-   <td class=muted>{% if r.status.get('ts') %}{{r.status.ts}}<br>планировок: {{r.status.get('enriched_ok','?')}}{% else %}—{% endif %}</td>
-   <td><a class=btn href="{{url_for('admin.project',slug=r.slug)}}">Открыть</a></td>
-  </tr>
-  {% endfor %}
- </table>
+<h1>🏠 Фиды квартир</h1>""" + _FLASH + """
+<div class="card hero">
+ <p><b>Что это.</b> Для каждого жилого комплекса здесь автоматически собираются готовые фиды (файлы XML) для площадок объявлений — с нашими планировками, фото и видами из окон.</p>
+ <p style="margin:0"><b>Как пользоваться.</b> Дайте площадке ссылку «XML» из нужной плитки — она сама заберёт квартиры. Кнопка «Открыть» — управление фото и настройками фида.</p>
+ <div class=legend>
+  <span>🔢 <b>число</b> — квартир в фиде</span>
+  <span>🔗 <b>открыть XML</b> — ссылка для площадки</span>
+  <span>⚙️ <b>Открыть</b> — фото и настройки</span>
+ </div>
 </div>
-<p><a class=btn gray href="{{url_for('admin.commercial_page')}}">🏢 Коммерческие фиды (мастер)</a></p>
+
+{% for r in rows %}
+<div class=pcard>
+ <div class=pcard-head>
+  <div>
+   <div class=pcard-title>{{r.name}}</div>
+   <div class=pcard-sub>код: {{r.slug}}{% if r.status.get('ts') %} · обновлён {{r.status.ts}}{% if r.status.get('enriched_ok') %} · планировок {{r.status.enriched_ok}}{% endif %}{% endif %}</div>
+  </div>
+  <a class="btn big" href="{{url_for('admin.project',slug=r.slug)}}">⚙️ Открыть</a>
+ </div>
+ <div class=feeds>
+  {% set feeds = [
+     ('ЦИАН', r.cian, r.slug ~ '.xml', '#2563eb'),
+     ('Авито', r.avito, r.slug ~ '-avito.xml', '#16a34a'),
+     ('Яндекс.Недвижимость', r.yandex, r.slug ~ '-yandex.xml', '#fc3f1d'),
+     ('Яндекс Поиск (новый)', r.yandex_realty, r.slug ~ '-yandex-realty.xml', '#f59e0b'),
+     ('ДомКлик', r.domclick, r.slug ~ '-domclick.xml', '#0d9488'),
+  ] %}
+  {% for name,cnt,path,color in feeds %}
+  <a class="feed{% if not cnt %} empty{% endif %}" style="--c:{{color}}" href="{{base}}/feed/{{path}}" target=_blank>
+   <div class=plat>{{name}}</div>
+   <div class=cnt>{{cnt or '—'}}</div>
+   <div class=lnk>открыть XML ↗</div>
+  </a>
+  {% endfor %}
+ </div>
+ <div class=pcard-foot>
+  <span>📷 Фото карточки: Авито <b>{{r.photos}}</b> · Яндекс <b>{{r.photos_y}}</b> · ЦИАН <b>{{r.photos_c}}</b></span>
+  <span>🪟 Виды из окон: <b>{{r.views}}</b> · <a href="{{url_for('admin.views_page',slug=r.slug)}}">список / загрузить</a></span>
+ </div>
+</div>
+{% endfor %}
+
+<div class=card>
+ <h2 style="margin-top:0">🏢 Коммерческие помещения</h2>
+ <p class=muted style="margin-top:0">Отдельные фиды для нежилых помещений — офисы, торговля, аренда.</p>
+ <a class="btn gray" href="{{url_for('admin.commercial_page')}}">Открыть коммерческие фиды →</a>
+</div>
 <p class=muted><a href="{{url_for('admin.logout')}}">Выйти</a></p>"""
 
 _VIEWS_HTML = _CSS + """<title>Виды — {{name}}</title>

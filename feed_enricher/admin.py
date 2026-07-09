@@ -29,7 +29,7 @@ from .config import (PROJECTS, PUBLIC_BASE_URL, ADMIN_DIR, project_dirs,
                      excluded_photos, add_excluded_photo)
 from .yadisk import save_resized_jpeg, sync_public_folder
 from .assembler_avito import enrich_pb_avito_feed
-from .assembler_yandex import assemble_yandex_feed, coords_from_avito
+from .assembler_yandex import assemble_yandex_feed, coords_from_avito, _korpus_no
 from .assembler_yandex_realty import assemble_yandex_realty_feed
 from .assembler import assemble_feed
 from .enricher import enrich_lot
@@ -222,6 +222,31 @@ def _views_count(slug: str) -> int:
     return sum(1 for p in vdir.glob("*") if p.is_dir() and any(p.glob("*.jpg"))) if vdir.exists() else 0
 
 
+def _feed_health(slug: str) -> dict:
+    """Страховка «новые лоты не сломают фиды»: ищем лоты в новых корпусах, у которых
+    нет привязки к Яндексу (yandex_house_ids). В новом формате Я.Поиск house-id
+    ОБЯЗАТЕЛЕН → без него площадка отклонит оффер. Малошумно: репортим только
+    реально «ломающее» (лоты не на продаже, у которых нет цены/площади, пропускаем)."""
+    out = {"ok": True, "missing": []}
+    proj = get_project(slug)
+    if not proj.get("yandex_building_id"):
+        return out  # проект без привязки к Яндексу — проверять нечего
+    cian = project_dirs(slug)["feeds"] / "original.xml"
+    if not cian.exists():
+        return out
+    house_ids = proj.get("yandex_house_ids", {}) or {}
+    miss: dict = {}
+    for l in parse_feed(cian.read_bytes()):
+        if not (l.price and l.area_total):
+            continue  # не выставлен на продажу — в фиды и так не попадает
+        if not house_ids.get(_korpus_no(l.house_name)):
+            key = l.house_name or "(корпус не указан)"
+            miss[key] = miss.get(key, 0) + 1
+    out["missing"] = [{"house": h, "lots": c} for h, c in sorted(miss.items())]
+    out["ok"] = not out["missing"]
+    return out
+
+
 def _views_coverage(slug: str) -> list:
     """По каждому лоту: id, метка, число видов (0 = нет). Сортировка: сначала без видов."""
     d = project_dirs(slug)
@@ -290,6 +315,7 @@ def dashboard():
             "photos_c": len(_photos(slug, "cian")),
             "views": _views_count(slug),
             "status": st.get(slug, {}),
+            "health": _feed_health(slug),
         })
     return render_template_string(_DASH_HTML, rows=rows, comm_cards=_commercial_cards(),
                                   base=PUBLIC_BASE_URL)
@@ -708,6 +734,9 @@ _CSS = """
  .pcard-foot{display:flex;gap:24px;flex-wrap:wrap;align-items:center;padding:13px 22px;background:#fafbfd;border-top:1px solid #eef1f5;font-size:14px;color:#475569}
  .head-actions{display:flex;gap:8px;flex-wrap:wrap}
  .sec-h{font-size:20px;font-weight:700;margin:30px 0 4px}
+ .health-bad{margin:14px 22px 0;padding:11px 14px;border-radius:9px;background:#fff4e5;border:1px solid #ffd8a8;color:#9a3412;font-size:14px;line-height:1.5}
+ .health-bad code{background:#ffe3c2;padding:1px 5px;border-radius:4px;font-size:13px}
+ .health-ok{color:#16a34a;font-weight:600}
  /* ── страница проекта: галереи фото по площадкам ── */
  .gcard{border-left:5px solid var(--c,#2563eb)}
  .ghead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:2px}
@@ -761,6 +790,13 @@ _DASH_HTML = _CSS + """<title>Фиды</title>
   </div>
   <a class="btn big" href="{{url_for('admin.project',slug=r.slug)}}">⚙️ Открыть</a>
  </div>
+ {% if not r.health.ok %}
+ <div class=health-bad>
+  ⚠️ <b>Требует настройки.</b> Новый корпус без привязки к Яндексу:
+  {% for m in r.health.missing %}<b>{{m.house}}</b> ({{m.lots}} лот.){% if not loop.last %}, {% endif %}{% endfor %}.
+  Добавьте id в <code>yandex_house_ids</code> (и проверьте, заведён ли корпус на ДомКлике) — иначе Яндекс&nbsp;Поиск отклонит эти лоты.
+ </div>
+ {% endif %}
  <div class=feeds>
   {% set feeds = [
      ('ЦИАН', r.cian, r.slug ~ '.xml', '#2563eb'),
@@ -780,6 +816,7 @@ _DASH_HTML = _CSS + """<title>Фиды</title>
  <div class=pcard-foot>
   <span>📷 Фото карточки: Авито <b>{{r.photos}}</b> · Яндекс <b>{{r.photos_y}}</b> · ЦИАН <b>{{r.photos_c}}</b></span>
   <span>🪟 Виды из окон: <b>{{r.views}}</b> · <a href="{{url_for('admin.views_page',slug=r.slug)}}">список / загрузить</a></span>
+  {% if r.health.ok %}<span class=health-ok>✓ все лоты покрыты</span>{% endif %}
  </div>
 </div>
 {% endfor %}

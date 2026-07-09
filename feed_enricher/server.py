@@ -23,6 +23,7 @@ from .enricher import enrich_lot, installment_values
 from .assembler import assemble_feed
 from .assembler_avito import assemble_avito_feed, enrich_pb_avito_feed
 from .assembler_yandex import assemble_yandex_feed, coords_from_avito
+from .assembler_domclick import assemble_domclick_feed
 from .yadisk import sync_public_folder, sync_view_folders
 from . import commercial as comm
 
@@ -144,6 +145,17 @@ def _apply_euro_rooms(slug: str, lots: list):
         print(f"[{slug}] европланировки: комнатность −1 у {n} лотов")
 
 
+def _gen_domclick(slug, proj, coords, feeds_dir):
+    """Фид ДомКлик (родной формат «Домклик Новостройки») из выгрузки ProfitBase."""
+    if not (proj.get("domclick") and proj.get("euro_source_url")):
+        return
+    try:
+        pbx = download_feed(proj["euro_source_url"])
+        assemble_domclick_feed(slug, pbx, coords or {}, proj, feeds_dir / "domclick.xml")
+    except Exception as e:
+        print(f"[{slug}] domclick feed failed: {e}")
+
+
 def resync_views(slug: str):
     """Часовой ресинк: зеркалит виды И фото ЦИАН из ЯД, пересобирает фиды (без перерисовки планировок)."""
     proj = PROJECTS.get(slug)
@@ -168,6 +180,7 @@ def resync_views(slug: str):
             coords = coords_from_avito(av.read_bytes()) if av.exists() else {}
             now = time.strftime("%Y-%m-%dT%H:%M:%S+03:00")
             assemble_yandex_feed(slug, lots, coords, d["feeds"] / "yandex.xml", now)
+            _gen_domclick(slug, proj, coords, d["feeds"])
         vdir = d["views"]
         lots_with_views = sum(1 for sub in vdir.iterdir()
                               if sub.is_dir() and any(sub.glob("*.jpg"))) if vdir.exists() else 0
@@ -266,6 +279,7 @@ def refresh_project(slug: str) -> dict:
             coords = coords_from_avito(avito_src) if avito_src else {}
             now = time.strftime("%Y-%m-%dT%H:%M:%S+03:00")
             assemble_yandex_feed(slug, lots, coords, dirs["feeds"] / "yandex.xml", now)
+            _gen_domclick(slug, proj, coords, dirs["feeds"])
         # Опционально пушим копию в ProfitBase
         uploaded = False
         if PB_UPLOAD_URL and PB_API_TOKEN:
@@ -443,12 +457,11 @@ def serve_feed_yandex(slug: str):
 
 @app.route("/feed/<slug>-domclick.xml")
 def serve_feed_domclick(slug: str):
-    # ДомКлик принимает формат YRL (Yandex Realty) — тот же, что наш Яндекс-фид.
-    # Отдаём его же; при отличиях в требованиях ДомКлик сделаем отдельный ассемблер.
+    # ДомКлик для новостроек — свой формат «Домклик Новостройки» (assembler_domclick).
     if slug not in PROJECTS:
         abort(404)
     dirs = project_dirs(slug)
-    p = dirs["feeds"] / "yandex.xml"
+    p = dirs["feeds"] / "domclick.xml"
     if not p.exists():
         refresh_project(slug)
     if not p.exists():

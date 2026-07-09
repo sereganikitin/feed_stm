@@ -84,6 +84,18 @@ PROJECTS = {
             "replace_markers":   ["/uploads/house/", "/uploads/facade/", "/uploads/building_image/"],
         },
         "sales_agent": {"organization": "St MICHAEL", "category": "застройщик", "url": "https://stmichael.ru"},
+        # ─── ДомКлик (родной формат «Домклик Новостройки») ───
+        # complex_id — id ЖК в ДомКлик; description_main / sales — ЗАПОЛНИТЬ по данным клиента.
+        "domclick": {
+            "source_name": "Зорге 9",               # имя проекта в выгрузке ProfitBase
+            "complex_id": "",                       # ← id ЖК в ДомКлик (или наш.дом.рф)
+            "name": "Зорге 9",
+            "address": "Москва, ул. Зорге, 9",
+            "description_main": {"title": "", "text": ""},   # ← описание ЖК
+            "sales": {"phone": "+74952924193", "officer_phone": "", "address": "",
+                      "lat": "", "lon": "", "timezone": "+3"},
+            "developer": {"id": "1", "name": "St Michael", "site": "https://stmichael.ru"},
+        },
         # ─── Виды из окон по лотам (несколько источников на Я.Диске) ───
         # mode "id"        — папка лота содержит «_id: <ExternalId>» в названии;
         # mode "flatnumber"— этаж → секция → «… - <apt>.<sub>», маппинг по FlatNumber
@@ -180,6 +192,17 @@ PROJECTS = {
             "yadisk_path":       "/",
         },
         "sales_agent": {"organization": "St MICHAEL", "category": "застройщик", "url": "https://stmichael.ru"},
+        # ─── ДомКлик (родной формат «Домклик Новостройки») ───
+        "domclick": {
+            "source_name": "Квартал Серебряный бор",   # имя проекта в выгрузке ProfitBase
+            "complex_id": "",                       # ← id ЖК в ДомКлик (или наш.дом.рф)
+            "name": "Квартал Серебряный Бор",
+            "address": "Москва, ул. Берзарина, 37",
+            "description_main": {"title": "", "text": ""},   # ← описание ЖК
+            "sales": {"phone": "+74952924193", "officer_phone": "", "address": "",
+                      "lat": "", "lon": "", "timezone": "+3"},
+            "developer": {"id": "1", "name": "St Michael", "site": "https://stmichael.ru"},
+        },
         # ─── Раскладка шаблона Б37 (1150×1040) ───
         # Слева — брендинг + фото дома, справа — большая белая зона:
         #   • сверху 3 метки «КОМНАТЫ / ПЛОЩАДЬ / ЭТАЖ»

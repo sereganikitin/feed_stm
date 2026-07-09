@@ -18,13 +18,28 @@ from .config import PUBLIC_BASE_URL, project_dirs, file_ver
 
 _LN = lambda t: t.split("}")[-1]
 
-# facing (ProfitBase) → renovation (ДомКлик)
+# facing (ProfitBase) → renovation (ДомКлик, строчными как в эталонном фиде)
 _RENO = {
-    "нет": "Без отделки", "без отделки": "Без отделки",
-    "черновая": "Черновая", "предчистовая": "Предчистовая",
-    "чистовая": "Чистовая", "чистовая с мебелью": "Чистовая",
-    "дизайнерская": "Чистовая", "white box": "Предчистовая",
+    "нет": "без отделки", "без отделки": "без отделки",
+    "черновая": "черновая", "предчистовая": "предчистовая",
+    "чистовая": "чистовая", "чистовая с мебелью": "чистовая",
+    "дизайнерская": "чистовая", "white box": "предчистовая",
 }
+
+
+def _bathroom(comb, sep):
+    """combined/separated-bathroom-unit → одно поле bathroom ДомКлик."""
+    try:
+        c, s = int(comb or 0), int(sep or 0)
+    except ValueError:
+        c = s = 0
+    if c + s >= 2:
+        return "Более 2"
+    if s >= 1:
+        return "Раздельный"
+    if c >= 1:
+        return "Совмещенный"
+    return ""
 
 _SELLABLE = {"AVAILABLE", "BOOKED", "EXECUTION"}
 
@@ -150,17 +165,11 @@ def assemble_domclick_feed(slug: str, pbxml_bytes: bytes, coords: dict,
         for o in lots:
             c = coords.get(o.get("internal-id"))
             if c: blat, blon = c; break
-        _e(b, "latitude", blat or clat); _e(b, "longitude", blon or clon)
-        _e(b, "address", dc.get("address"))
         _e(b, "floors", floors)
-        # обязательные для ДомКлик поля корпуса
-        _e(b, "floors_ready", floors)
-        _e(b, "building_state", _BSTATE.get(bstate, "строится"))
+        _e(b, "building_state", bstate or "unfinished")   # сырое значение, как в эталоне
         _e(b, "built_year", byear)
         _e(b, "ready_quarter", bq)
         _e(b, "building_type", dc.get("building_type") or "монолитный")
-        _e(b, "passenger_lifts_count", dc.get("passenger_lifts_count") or "1")
-        _e(b, "cargo_lifts_count", dc.get("cargo_lifts_count") or "1")
         if first_img:
             _e(b, "image", first_img)
         flats = ET.SubElement(b, "flats")
@@ -169,34 +178,30 @@ def assemble_domclick_feed(slug: str, pbxml_bytes: bytes, coords: dict,
             f = ET.SubElement(flats, "flat")
             _e(f, "flat_id", iid)
             _e(f, "apartment", _cf(o, "Усл номер квартиры") or _gv(o, "number").rsplit("-", 1)[-1])
-            _e(f, "entrance", _gv(o, "building-section"))
-            _e(f, "booking", "1" if _gv(o, "status") == "BOOKED" else "0")
-            _e(f, "euro_plan", "1" if _gv(o, "euro-layout") == "1" else "0")
-            _e(f, "connected_bathroom", _gv(o, "combined-bathroom-unit") or "0")
-            _e(f, "separated_bathroom", _gv(o, "separated-bathroom-unit") or "0")
             _e(f, "floor", _gv(o, "floor"))
             _e(f, "room", "0" if _gv(o, "studio") == "1" else (_gv(o, "rooms") or "0"))
             plan = enriched_dir / f"{iid}.png"
             if plan.exists():
-                _e(f, "plan", f"{PUBLIC_BASE_URL}/enriched/{slug}/{file_ver(plan)}/{iid}.png")
+                plans = ET.SubElement(f, "plans")
+                _e(plans, "plan", f"{PUBLIC_BASE_URL}/enriched/{slug}/{file_ver(plan)}/{iid}.png")
+            _e(f, "ceiling_height", _cf(o, "Высота потолка"))
+            _e(f, "balcony", "0")
+            _e(f, "loggia", "0")
             fac = (_gv(o, "facing") or "").lower()
-            _e(f, "renovation", _RENO.get(fac, "Без отделки"))
-            price = _gv(_sub(o, "price"), "value")
-            _e(f, "price", price)
-            pc = ET.SubElement(f, "price_conditions")
-            conds = ET.SubElement(pc, "conditions")
-            cond = ET.SubElement(conds, "condition")
-            _e(cond, "kind", "cash"); _e(cond, "price", price)
+            _e(f, "renovation", _RENO.get(fac, "без отделки"))
+            _e(f, "price", _gv(_sub(o, "price"), "value"))
             _e(f, "area", _gv(_sub(o, "area"), "value"))
             _e(f, "kitchen_area", _cf(o, "Сайт.Кухня-гостиная") or _cf(o, "Сайт.Площадь кухни, м2"))
-            wv = _wview(_gv(o, "window-view"))
+            la = _cf(o, "Сайт.Жилая площадь") or _cf(o, "Жилая площадь")
+            if la:
+                _e(f, "living_area", la)
+            wv = _gv(o, "window-view")   # сырое значение, как в эталоне
             if wv:
                 _e(f, "window_view", wv)
-            tour = _cf(o, "3D планировка")
-            if tour.startswith("http"):
-                vts = ET.SubElement(f, "virtual_tours")
-                vt = ET.SubElement(vts, "virtual_tour")
-                _e(vt, "name", "3D тур"); _e(vt, "model_url", tour); _e(vt, "provider", "iframe")
+            ba = _bathroom(_gv(o, "combined-bathroom-unit"), _gv(o, "separated-bathroom-unit"))
+            if ba:
+                _e(f, "bathroom", ba)
+            _e(f, "housing_type", "1" if _gv(o, "property_type").startswith("Апарт") else "0")
 
     # описание ЖК
     dm = dc.get("description_main") or {}
@@ -208,16 +213,22 @@ def assemble_domclick_feed(slug: str, pbxml_bytes: bytes, coords: dict,
     if s.get("phone"):
         si = ET.SubElement(cx, "sales_info")
         _e(si, "sales_phone", s.get("phone"))
-        _e(si, "responsible_officer_phone", s.get("officer_phone") or s.get("phone"))
         _e(si, "sales_address", s.get("address"))
         _e(si, "sales_latitude", s.get("lat")); _e(si, "sales_longitude", s.get("lon"))
         _e(si, "timezone", s.get("timezone") or "+3")
+        if s.get("work_days"):
+            wds = ET.SubElement(si, "work_days")
+            for wd in s["work_days"]:
+                w = ET.SubElement(wds, "work_day")
+                _e(w, "day", wd[0]); _e(w, "open_at", wd[1]); _e(w, "close_at", wd[2])
     # застройщик
     dev = dc.get("developer") or cfg.get("sales_agent") or {}
     d = ET.SubElement(cx, "developer")
     _e(d, "id", dev.get("id") or "1")
     _e(d, "name", dev.get("name") or dev.get("organization"))
     _e(d, "site", dev.get("site") or dev.get("url"))
+    if dev.get("logo"):
+        _e(d, "logo", dev["logo"])
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     ET.indent(out)

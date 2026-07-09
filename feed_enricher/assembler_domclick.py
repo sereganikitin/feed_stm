@@ -28,6 +28,25 @@ _RENO = {
 
 _SELLABLE = {"AVAILABLE", "BOOKED", "EXECUTION"}
 
+# building-state (ProfitBase) → building_state (ДомКлик)
+_BSTATE = {"hand-over": "сдан", "built": "сдан", "unfinished": "строится"}
+
+
+def _wview(raw: str) -> str:
+    """Вид из окна ProfitBase (конкретные места) → словарь ДомКлик (двор/улица)."""
+    r = (raw or "").strip().lower()
+    if not r:
+        return ""
+    dvor = "двор" in r
+    other = ("," in r) or any(k in r for k in (
+        "улиц", "поле", "парк", "роща", "бор", "цска", "река", "набережн",
+        "город", "проспект", "шоссе", "сквер"))
+    if dvor and other:
+        return "Во двор и на улицу"
+    if dvor:
+        return "Во двор"
+    return "На улицу"
+
 
 def _gv(o, t):
     for c in o:
@@ -75,7 +94,7 @@ def _house(o):
     if h is None:
         return ("", "", "", "", "")
     return (_gv(h, "id"), _gv(h, "name"), _gv(h, "floors-total"),
-            _gv(h, "built-year"), _gv(h, "ready-quarter"))
+            _gv(h, "built-year"), _gv(h, "ready-quarter"), _gv(h, "building-state"))
 
 
 def assemble_domclick_feed(slug: str, pbxml_bytes: bytes, coords: dict,
@@ -116,10 +135,14 @@ def assemble_domclick_feed(slug: str, pbxml_bytes: bytes, coords: dict,
     for f in sorted(pdir.glob("*.jpg"))[:20]:
         _e(imgs, "image", f"{PUBLIC_BASE_URL}/extra_yandex/{slug}/{file_ver(f)}/{f.name}")
 
+    bmap = dc.get("buildings", {}) or {}   # id корпуса ProfitBase → id корпуса ДомКлик
+    first_img = None
+    for f in sorted(project_dirs(slug)["extra_yandex"].glob("*.jpg"))[:1]:
+        first_img = f"{PUBLIC_BASE_URL}/extra_yandex/{slug}/{file_ver(f)}/{f.name}"
     blds = ET.SubElement(cx, "buildings")
-    for (hid, hname, floors, byear, bq), lots in sorted(houses.items()):
+    for (hid, hname, floors, byear, bq, bstate), lots in sorted(houses.items()):
         b = ET.SubElement(blds, "building")
-        _e(b, "id", hid)
+        _e(b, "id", bmap.get(hid) or bmap.get(str(hid)) or hid)
         _e(b, "fz_214", "1")
         _e(b, "name", hname)
         # координаты корпуса — по первому лоту
@@ -130,6 +153,16 @@ def assemble_domclick_feed(slug: str, pbxml_bytes: bytes, coords: dict,
         _e(b, "latitude", blat or clat); _e(b, "longitude", blon or clon)
         _e(b, "address", dc.get("address"))
         _e(b, "floors", floors)
+        # обязательные для ДомКлик поля корпуса
+        _e(b, "floors_ready", floors)
+        _e(b, "building_state", _BSTATE.get(bstate, "строится"))
+        _e(b, "built_year", byear)
+        _e(b, "ready_quarter", bq)
+        _e(b, "building_type", dc.get("building_type") or "монолитный")
+        _e(b, "passenger_lifts_count", dc.get("passenger_lifts_count") or "1")
+        _e(b, "cargo_lifts_count", dc.get("cargo_lifts_count") or "1")
+        if first_img:
+            _e(b, "image", first_img)
         flats = ET.SubElement(b, "flats")
         for o in lots:
             iid = o.get("internal-id")
@@ -156,7 +189,9 @@ def assemble_domclick_feed(slug: str, pbxml_bytes: bytes, coords: dict,
             _e(cond, "kind", "cash"); _e(cond, "price", price)
             _e(f, "area", _gv(_sub(o, "area"), "value"))
             _e(f, "kitchen_area", _cf(o, "Сайт.Кухня-гостиная") or _cf(o, "Сайт.Площадь кухни, м2"))
-            _e(f, "window_view", _gv(o, "window-view"))
+            wv = _wview(_gv(o, "window-view"))
+            if wv:
+                _e(f, "window_view", wv)
             tour = _cf(o, "3D планировка")
             if tour.startswith("http"):
                 vts = ET.SubElement(f, "virtual_tours")

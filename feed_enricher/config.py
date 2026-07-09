@@ -89,6 +89,7 @@ PROJECTS = {
         "domclick": {
             "source_name": "Зорге 9",               # имя проекта в выгрузке ProfitBase
             "complex_id": "",                       # ← id ЖК в ДомКлик (или наш.дом.рф)
+            "buildings": {},                        # ← {house_id ProfitBase: id корпуса ДомКлик}: 23786 Madison, 23787 Manhattan, 23789 Soho
             "name": "Зорге 9",
             "address": "Москва, ул. Зорге, 9",
             "description_main": {"title": "", "text": ""},   # ← описание ЖК
@@ -196,6 +197,7 @@ PROJECTS = {
         "domclick": {
             "source_name": "Квартал Серебряный бор",   # имя проекта в выгрузке ProfitBase
             "complex_id": "",                       # ← id ЖК в ДомКлик (или наш.дом.рф)
+            "buildings": {},                        # ← {house_id ProfitBase: id корпуса ДомКлик}: 115459 Gold, 115460 Silver, 115461 Platinum
             "name": "Квартал Серебряный Бор",
             "address": "Москва, ул. Берзарина, 37",
             "description_main": {"title": "", "text": ""},   # ← описание ЖК

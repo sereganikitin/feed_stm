@@ -30,6 +30,7 @@ from .config import (PROJECTS, PUBLIC_BASE_URL, ADMIN_DIR, project_dirs,
 from .yadisk import save_resized_jpeg, sync_public_folder
 from .assembler_avito import enrich_pb_avito_feed
 from .assembler_yandex import assemble_yandex_feed, coords_from_avito
+from .assembler_yandex_realty import assemble_yandex_realty_feed
 from .assembler import assemble_feed
 from .enricher import enrich_lot
 from .parser import parse_feed
@@ -140,6 +141,7 @@ def _rebuild_yandex(slug: str) -> None:
     coords = coords_from_avito(av.read_bytes()) if av.exists() else {}
     now = time.strftime("%Y-%m-%dT%H:%M:%S+03:00")
     assemble_yandex_feed(slug, lots, coords, d["feeds"] / "yandex.xml", now)
+    assemble_yandex_realty_feed(slug, lots, coords, d["feeds"] / "yandex_realty.xml", now)
 
 
 def _rebuild_cian(slug: str) -> None:
@@ -278,6 +280,7 @@ def dashboard():
             "cian": _count(d["feeds"] / "feed.xml", "object"),
             "avito": _count(d["feeds"] / "avito.xml", "Ad"),
             "yandex": _count(d["feeds"] / "yandex.xml", "offer"),
+            "yandex_realty": _count(d["feeds"] / "yandex_realty.xml", "offer"),
             "domclick": _count(d["feeds"] / "domclick.xml", "flat"),
             "photos": len(_photos(slug, "avito")),
             "photos_y": len(_photos(slug, "yandex")),
@@ -672,13 +675,14 @@ _DASH_HTML = _CSS + """<title>Фиды</title>
 <h1>Фиды квартир — панель</h1>""" + _FLASH + """
 <div class=card>
  <table>
-  <tr><th>Проект</th><th>ЦИАН</th><th>Авито</th><th>Яндекс</th><th>ДомКлик</th><th>Фото А/Я/Ц</th><th>Виды</th><th>Обновлено</th><th></th></tr>
+  <tr><th>Проект</th><th>ЦИАН</th><th>Авито</th><th>Яндекс</th><th>Я.Поиск</th><th>ДомКлик</th><th>Фото А/Я/Ц</th><th>Виды</th><th>Обновлено</th><th></th></tr>
   {% for r in rows %}
   <tr>
    <td><b>{{r.name}}</b><div class=muted>{{r.slug}}</div></td>
    <td>{{r.cian}} <div class=muted><a href="{{base}}/feed/{{r.slug}}.xml" target=_blank>xml</a></div></td>
    <td>{{r.avito}} <div class=muted><a href="{{base}}/feed/{{r.slug}}-avito.xml" target=_blank>xml</a></div></td>
    <td>{{r.yandex}} <div class=muted><a href="{{base}}/feed/{{r.slug}}-yandex.xml" target=_blank>xml</a></div></td>
+   <td>{{r.yandex_realty}} <div class=muted><a href="{{base}}/feed/{{r.slug}}-yandex-realty.xml" target=_blank>xml</a></div></td>
    <td>{{r.domclick}} <div class=muted><a href="{{base}}/feed/{{r.slug}}-domclick.xml" target=_blank>xml</a></div></td>
    <td>{{r.photos}} / {{r.photos_y}} / {{r.photos_c}}</td>
    <td>{{r.views}} <div class=muted><a href="{{url_for('admin.views_page',slug=r.slug)}}">список</a></div></td>

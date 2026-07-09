@@ -23,6 +23,7 @@ from .enricher import enrich_lot, installment_values
 from .assembler import assemble_feed
 from .assembler_avito import assemble_avito_feed, enrich_pb_avito_feed
 from .assembler_yandex import assemble_yandex_feed, coords_from_avito
+from .assembler_yandex_realty import assemble_yandex_realty_feed
 from .assembler_domclick import assemble_domclick_feed, enrich_domclick_feed
 from .yadisk import sync_public_folder, sync_view_folders
 from . import commercial as comm
@@ -189,6 +190,7 @@ def resync_views(slug: str):
             coords = coords_from_avito(av.read_bytes()) if av.exists() else {}
             now = time.strftime("%Y-%m-%dT%H:%M:%S+03:00")
             assemble_yandex_feed(slug, lots, coords, d["feeds"] / "yandex.xml", now)
+            assemble_yandex_realty_feed(slug, lots, coords, d["feeds"] / "yandex_realty.xml", now)
             _gen_domclick(slug, proj, coords, d["feeds"])
         vdir = d["views"]
         lots_with_views = sum(1 for sub in vdir.iterdir()
@@ -288,6 +290,7 @@ def refresh_project(slug: str) -> dict:
             coords = coords_from_avito(avito_src) if avito_src else {}
             now = time.strftime("%Y-%m-%dT%H:%M:%S+03:00")
             assemble_yandex_feed(slug, lots, coords, dirs["feeds"] / "yandex.xml", now)
+            assemble_yandex_realty_feed(slug, lots, coords, dirs["feeds"] / "yandex_realty.xml", now)
             _gen_domclick(slug, proj, coords, dirs["feeds"])
         # Опционально пушим копию в ProfitBase
         uploaded = False
@@ -457,6 +460,20 @@ def serve_feed_yandex(slug: str):
         abort(404)
     dirs = project_dirs(slug)
     p = dirs["feeds"] / "yandex.xml"
+    if not p.exists():
+        refresh_project(slug)
+    if not p.exists():
+        abort(503)
+    return send_file(p, mimetype="application/xml")
+
+
+@app.route("/feed/<slug>-yandex-realty.xml")
+def serve_feed_yandex_realty(slug: str):
+    # Новый «Яндекс Поиск Недвижимости» (metarealty/2024-12) — отдельно от yandex.xml.
+    if slug not in PROJECTS:
+        abort(404)
+    dirs = project_dirs(slug)
+    p = dirs["feeds"] / "yandex_realty.xml"
     if not p.exists():
         refresh_project(slug)
     if not p.exists():

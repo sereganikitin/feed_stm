@@ -40,11 +40,14 @@ from . import commercial as comm
 # mirror=True (ЦИАН) — синк зеркалит ЯД (удаления подхватываются).
 _KINDS = {
     "avito":  {"dir": "extra",        "order_key": "extra_photo_order",
-               "cfg_key": "avito_extra_photos",  "url": "extra",        "title": "Авито", "mirror": False},
+               "cfg_key": "avito_extra_photos",  "url": "extra",        "title": "Авито", "mirror": False,
+               "color": "#16a34a", "where": "Показываются в объявлении на Авито"},
     "yandex": {"dir": "extra_yandex", "order_key": "extra_photo_order_yandex",
-               "cfg_key": "yandex_extra_photos", "url": "extra_yandex", "title": "Яндекс.Недвижимость", "mirror": False},
+               "cfg_key": "yandex_extra_photos", "url": "extra_yandex", "title": "Яндекс.Недвижимость", "mirror": False,
+               "color": "#fc3f1d", "where": "Идут в Яндекс.Недвижимость, Яндекс Поиск и ДомКлик"},
     "cian":   {"dir": "extra_cian",   "order_key": "extra_photo_order_cian",
-               "cfg_key": "cian_extra_photos",   "url": "extra_cian",   "title": "ЦИАН", "mirror": True},
+               "cfg_key": "cian_extra_photos",   "url": "extra_cian",   "title": "ЦИАН", "mirror": True,
+               "color": "#2563eb", "where": "Показываются в карточке на ЦИАН"},
 }
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
@@ -288,7 +291,45 @@ def dashboard():
             "views": _views_count(slug),
             "status": st.get(slug, {}),
         })
-    return render_template_string(_DASH_HTML, rows=rows, base=PUBLIC_BASE_URL)
+    return render_template_string(_DASH_HTML, rows=rows, comm_cards=_commercial_cards(),
+                                  base=PUBLIC_BASE_URL)
+
+
+# метаданные площадок для карточек коммерции: (подпись, тег для подсчёта, цвет)
+_COMM_PLAT = {"cian": ("ЦИАН", "object", "#2563eb"),
+              "avito": ("Авито", "Ad", "#16a34a"),
+              "yandex": ("Яндекс", "offer", "#fc3f1d")}
+
+
+def _commercial_cards() -> list:
+    """Карточки коммерческих фидов для дашборда: wizard-проекты + кодовые ЦИАН-фиды."""
+    cards = []
+    # 1) Проекты «мастера» (cache/admin/commercial.json)
+    for cslug, cp in comm.load_projects().items():
+        d = comm.comm_dirs(cslug)
+        tiles = []
+        for plat in cp.get("platforms", []):
+            label, tag, color = _COMM_PLAT.get(plat, (plat, "object", "#2563eb"))
+            fp = d["feeds"] / comm._PLATFORM_FILE.get(plat, "feed.xml")
+            tiles.append({"plat": label, "cnt": _count(fp, tag), "color": color,
+                          "url": f"{PUBLIC_BASE_URL}/feed/comm/{cslug}-{plat}.xml"})
+        cards.append({"name": cp.get("name", cslug), "sub": f"код: {cslug}",
+                      "tiles": tiles, "refresh": url_for("admin.commercial_refresh", slug=cslug),
+                      "preview": None})
+    # 2) Отдельные «кодовые» фиды (собираются напрямую через ProfitBase API)
+    from . import comm_zorge_cian, comm_cian_rent
+    for key, name, refr, feed, path in [
+        ("comm-zorge", "Зорге 9 — коммерция", "/refresh-comm-zorge",
+         "/feed/comm/zorge-cian.xml", comm_zorge_cian.OUT),
+        ("comm-b37rent", "Б37 — коммерция (аренда)", "/refresh-comm-rent",
+         "/feed/comm/b37-rent-cian.xml", comm_cian_rent.OUT),
+    ]:
+        cards.append({"name": name, "sub": "сборка через ProfitBase API",
+                      "tiles": [{"plat": "ЦИАН", "cnt": _count(path, "object"),
+                                 "color": "#2563eb", "url": PUBLIC_BASE_URL + feed}],
+                      "refresh": PUBLIC_BASE_URL + refr,
+                      "preview": f"{PUBLIC_BASE_URL}/?feed={key}"})
+    return cards
 
 
 @admin_bp.route("/<slug>")
@@ -309,6 +350,7 @@ def project(slug: str):
             "kind": kk, "title": v["title"], "url": v["url"],
             "photos": _photos(slug, kk), "feed": feed,
             "has_yd": has_yd, "mirror": v.get("mirror", False),
+            "color": v.get("color", "#2563eb"), "where": v.get("where", ""),
         })
     return render_template_string(
         _PROJ_HTML, slug=slug, proj=proj, base=PUBLIC_BASE_URL,
@@ -664,6 +706,15 @@ _CSS = """
  .feed .lnk{font-size:12px;color:#2563eb}
  .feed.empty{opacity:.5}
  .pcard-foot{display:flex;gap:24px;flex-wrap:wrap;align-items:center;padding:13px 22px;background:#fafbfd;border-top:1px solid #eef1f5;font-size:14px;color:#475569}
+ .head-actions{display:flex;gap:8px;flex-wrap:wrap}
+ .sec-h{font-size:20px;font-weight:700;margin:30px 0 4px}
+ /* ── страница проекта: галереи фото по площадкам ── */
+ .gcard{border-left:5px solid var(--c,#2563eb)}
+ .ghead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:2px}
+ .ghead h2{margin:0}
+ .gdot{width:11px;height:11px;border-radius:50%;background:var(--c,#2563eb);display:inline-block;margin-right:2px}
+ .gwhere{color:#64748b;font-size:13.5px}
+ .ghint{background:#f6f8fb;border:1px solid #eef1f5;border-radius:8px;padding:9px 12px;font-size:13.5px;line-height:1.5;color:#475569;margin:10px 0}
 </style>
 """
 
@@ -733,12 +784,34 @@ _DASH_HTML = _CSS + """<title>Фиды</title>
 </div>
 {% endfor %}
 
-<div class=card>
- <h2 style="margin-top:0">🏢 Коммерческие помещения</h2>
- <p class=muted style="margin-top:0">Отдельные фиды для нежилых помещений — офисы, торговля, аренда.</p>
- <a class="btn gray" href="{{url_for('admin.commercial_page')}}">Открыть коммерческие фиды →</a>
+<div class=sec-h>🏢 Коммерческие помещения</div>
+<p class=muted style="margin:0 0 14px">Фиды нежилых помещений — офисы, торговля, аренда.</p>
+{% for c in comm_cards %}
+<div class=pcard>
+ <div class=pcard-head>
+  <div>
+   <div class=pcard-title>{{c.name}}</div>
+   <div class=pcard-sub>{{c.sub}}</div>
+  </div>
+  <div class=head-actions>
+   {% if c.preview %}<a class="btn gray" href="{{c.preview}}" target=_blank>👁 Превью</a>{% endif %}
+   <form method=post action="{{c.refresh}}" style="margin:0"><button class="btn green">↻ Обновить</button></form>
+  </div>
+ </div>
+ <div class=feeds>
+  {% for t in c.tiles %}
+  <a class="feed{% if not t.cnt %} empty{% endif %}" style="--c:{{t.color}}" href="{{t.url}}" target=_blank>
+   <div class=plat>{{t.plat}}</div>
+   <div class=cnt>{{t.cnt or '—'}}</div>
+   <div class=lnk>открыть XML ↗</div>
+  </a>
+  {% endfor %}
+  {% if not c.tiles %}<div class=muted style="padding:8px">Площадки не выбраны — задайте в мастере.</div>{% endif %}
+ </div>
 </div>
-<p class=muted><a href="{{url_for('admin.logout')}}">Выйти</a></p>"""
+{% endfor %}
+<p style="margin-top:16px"><a class="btn gray" href="{{url_for('admin.commercial_page')}}">⚙️ Мастер: добавить / изменить / удалить фид →</a></p>
+<p class=muted style="margin-top:20px"><a href="{{url_for('admin.logout')}}">Выйти</a></p>"""
 
 _VIEWS_HTML = _CSS + """<title>Виды — {{name}}</title>
 <p><a href="{{url_for('admin.dashboard')}}">← все фиды</a> · <a href="{{url_for('admin.project',slug=slug)}}">{{name}}</a></p>
@@ -919,13 +992,21 @@ _PROJ_HTML = _CSS + """<title>{{proj.name}}</title>
  </div>
 </div>
 
-{% if check.first %}<p class=muted>Превью первого лота {{check.first.id}}: {{check.first.rooms}} · {{check.first.square}} м² · {{check.first.price}} ₽. Первой в карточке всегда идёт наша планировка{% if plan %} (пунктирная плитка){% endif %}.</p>{% endif %}
+<div class=sec-h>📷 Фото карточек по площадкам</div>
+<p class=muted style="margin:0 0 14px">У каждой площадки свой набор фото. Первой в карточке всегда идёт наша <b>планировка</b>{% if plan %} (плитка с пунктиром){% endif %}, затем эти фото, затем виды из окон.</p>
 {% for g in galleries %}
-<div class=card>
- <h2 style="margin-top:0">Фото — {{g.title}} ({{g.photos|length}})</h2>
- <p class=muted>Перетаскивайте мышкой — порядок · <b>✕</b> — удалить · плитка <b>＋</b> — загрузить. Применяется сразу.
-   · <a href="{{g.feed}}" target=_blank>открыть XML</a></p>
- {% if g.mirror %}<p class=muted>Это зеркало папки Я.Диска: набор синхронизируется раз в час (добавления и удаления в ЯД подхватываются) и по кнопке ниже. Карточка ЦИАН: <b>планировка → эти фото → виды из окон</b>. Удаление здесь временно — если фото осталось в ЯД, синк вернёт его (убирайте в самой папке Я.Диска).</p>{% endif %}
+<div class="card gcard" style="--c:{{g.color}}">
+ <div class=ghead>
+  <h2><span class=gdot></span>{{g.title}}</h2>
+  <span class=pill>{{g.photos|length}} фото</span>
+  <span class=gwhere>{{g.where}}</span>
+ </div>
+ <div class=ghint>
+  Порядок в карточке: <b>планировка → эти фото → виды из окон</b>.
+  Перетаскивайте мышкой, чтобы менять порядок · <b>✕</b> удалить · плитка <b>＋</b> добавить. Применяется сразу.
+  {% if g.mirror %}<br>🔄 Это <b>зеркало папки Я.Диска</b>: синхронизируется автоматически (раз в час) и по кнопке ниже — добавления и удаления в ЯД подхватываются. Удаление здесь временно; чтобы убрать навсегда — удалите фото в самой папке Я.Диска.{% endif %}
+  · <a href="{{g.feed}}" target=_blank>открыть XML фида ↗</a>
+ </div>
  <div class=strip data-kind="{{g.kind}}"
       data-upload="{{url_for('admin.upload_photos',slug=slug,kind=g.kind)}}"
       data-delete="{{url_for('admin.delete_photo',slug=slug,kind=g.kind)}}"
@@ -941,7 +1022,7 @@ _PROJ_HTML = _CSS + """<title>{{proj.name}}</title>
    <label class="tile add" title="Загрузить фото">＋<input type=file accept="image/*" multiple hidden></label>
  </div>
  {% if g.has_yd %}<form method=post action="{{url_for('admin.sync_yd',slug=slug,kind=g.kind)}}" style="margin-top:12px">
-  <button class="btn gray">Синхронизировать с Яндекс.Диска</button>
+  <button class="btn gray">↻ Синхронизировать с Яндекс.Диска</button>
  </form>{% endif %}
 </div>
 {% endfor %}

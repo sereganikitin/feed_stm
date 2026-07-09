@@ -166,10 +166,16 @@ def assemble_domclick_feed(slug: str, pbxml_bytes: bytes, coords: dict,
             c = coords.get(o.get("internal-id"))
             if c: blat, blon = c; break
         _e(b, "floors", floors)
+        _e(b, "floors_ready", floors)
         _e(b, "building_state", bstate or "unfinished")   # сырое значение, как в эталоне
+        _e(b, "building_phase", "1")
         _e(b, "built_year", byear)
         _e(b, "ready_quarter", bq)
         _e(b, "building_type", dc.get("building_type") or "монолитный")
+        _e(b, "address", dc.get("address"))
+        _e(b, "latitude", blat or clat); _e(b, "longitude", blon or clon)
+        _e(b, "passenger_lifts_count", dc.get("passenger_lifts_count") or "1")
+        _e(b, "cargo_lifts_count", dc.get("cargo_lifts_count") or "1")
         if first_img:
             _e(b, "image", first_img)
         flats = ET.SubElement(b, "flats")
@@ -195,7 +201,7 @@ def assemble_domclick_feed(slug: str, pbxml_bytes: bytes, coords: dict,
             la = _cf(o, "Сайт.Жилая площадь") or _cf(o, "Жилая площадь")
             if la:
                 _e(f, "living_area", la)
-            wv = _gv(o, "window-view")   # сырое значение, как в эталоне
+            wv = _wview(_gv(o, "window-view"))   # словарь ДомКлик (сырой валидатор режет)
             if wv:
                 _e(f, "window_view", wv)
             ba = _bathroom(_gv(o, "combined-bathroom-unit"), _gv(o, "separated-bathroom-unit"))

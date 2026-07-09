@@ -278,6 +278,7 @@ def dashboard():
             "cian": _count(d["feeds"] / "feed.xml", "object"),
             "avito": _count(d["feeds"] / "avito.xml", "Ad"),
             "yandex": _count(d["feeds"] / "yandex.xml", "offer"),
+            "domclick": _count(d["feeds"] / "domclick.xml", "flat"),
             "photos": len(_photos(slug, "avito")),
             "photos_y": len(_photos(slug, "yandex")),
             "photos_c": len(_photos(slug, "cian")),
@@ -671,13 +672,14 @@ _DASH_HTML = _CSS + """<title>Фиды</title>
 <h1>Фиды квартир — панель</h1>""" + _FLASH + """
 <div class=card>
  <table>
-  <tr><th>Проект</th><th>ЦИАН</th><th>Авито</th><th>Яндекс</th><th>Фото А/Я/Ц</th><th>Виды</th><th>Обновлено</th><th></th></tr>
+  <tr><th>Проект</th><th>ЦИАН</th><th>Авито</th><th>Яндекс</th><th>ДомКлик</th><th>Фото А/Я/Ц</th><th>Виды</th><th>Обновлено</th><th></th></tr>
   {% for r in rows %}
   <tr>
    <td><b>{{r.name}}</b><div class=muted>{{r.slug}}</div></td>
    <td>{{r.cian}} <div class=muted><a href="{{base}}/feed/{{r.slug}}.xml" target=_blank>xml</a></div></td>
    <td>{{r.avito}} <div class=muted><a href="{{base}}/feed/{{r.slug}}-avito.xml" target=_blank>xml</a></div></td>
    <td>{{r.yandex}} <div class=muted><a href="{{base}}/feed/{{r.slug}}-yandex.xml" target=_blank>xml</a></div></td>
+   <td>{{r.domclick}} <div class=muted><a href="{{base}}/feed/{{r.slug}}-domclick.xml" target=_blank>xml</a></div></td>
    <td>{{r.photos}} / {{r.photos_y}} / {{r.photos_c}}</td>
    <td>{{r.views}} <div class=muted><a href="{{url_for('admin.views_page',slug=r.slug)}}">список</a></div></td>
    <td class=muted>{% if r.status.get('ts') %}{{r.status.ts}}<br>планировок: {{r.status.get('enriched_ok','?')}}{% else %}—{% endif %}</td>

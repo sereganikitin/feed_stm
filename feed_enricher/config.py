@@ -39,6 +39,8 @@ PROJECTS = {
         "pb_feed_url": "https://pb7828.profitbase.ru/export/cian/52f269befad84358fb0c88a64dc2770c?scheme=https",
         # Флаг европланировки → комнатность по спальням (FlatRoomsCount−1). См. b37.
         "euro_source_url": "https://pb7828.profitbase.ru/export/profitbase_xml/1ff0788c09898afd046dadeb3501e901?scheme=https",
+        # Готовый DomClick-экспорт ProfitBase (правильные id + контент) — enrich подменяет планировки/фото.
+        "pb_domclick_url": "https://pb7828.profitbase.ru/export/domclick/f18b9abae3e1c3c30a84cf9c93af49f5?scheme=https",
         "figma_template_url": "https://static.tildacdn.com/tild3130-3231-4832-a464-623331636437/plan-z9.jpg",
         "template_ext": "jpg",
         # ─── Параметры выгрузки в формате Авито ───
@@ -88,14 +90,25 @@ PROJECTS = {
         # complex_id — id ЖК в ДомКлик; description_main / sales — ЗАПОЛНИТЬ по данным клиента.
         "domclick": {
             "source_name": "Зорге 9",               # имя проекта в выгрузке ProfitBase
-            "complex_id": "",                       # ← id ЖК в ДомКлик (или наш.дом.рф)
-            "buildings": {},                        # ← {house_id ProfitBase: id корпуса ДомКлик}: 23786 Madison, 23787 Manhattan, 23789 Soho
+            "complex_id": "111318",                 # id ЖК в ДомКлик
+            # id корпусов ДомКлик: 23786 Madison, 23787 Manhattan, 23789 Soho — ЗАПОЛНИТЬ
+            "buildings": {},
             "name": "Зорге 9",
             "address": "Москва, ул. Зорге, 9",
-            "description_main": {"title": "", "text": ""},   # ← описание ЖК
-            "sales": {"phone": "+74952924193", "officer_phone": "", "address": "",
-                      "lat": "", "lon": "", "timezone": "+3"},
-            "developer": {"id": "1", "name": "St Michael", "site": "https://stmichael.ru"},
+            "description_main": {"title": "", "text": (
+                "ЖК «Зорге 9» (Richard) — премиальные апартаменты в Хорошёво-Мневниках, "
+                "рядом с парком «Серебряный Бор» и набережной Москвы-реки. Монолитные корпуса, "
+                "дизайнерские лобби, закрытая благоустроенная территория, развитая инфраструктура. "
+                "10 минут до Москва-Сити, метро в шаговой доступности. Дом сдан.")},
+            "sales": {"phone": "+74954920191",
+                      "address": "г. Москва, ул. Зорге, д. 9Ас5",
+                      "lat": "55.78332994394052", "lon": "37.50971994616936",
+                      "timezone": "+3",
+                      "work_days": [("пн", "09:00", "21:00"), ("вт", "09:00", "21:00"),
+                                    ("ср", "09:00", "21:00"), ("чт", "09:00", "21:00"),
+                                    ("пт", "09:00", "21:00"), ("сб", "09:00", "21:00"),
+                                    ("вс", "09:00", "21:00")]},
+            "developer": {"id": "277156", "name": "St. Michael", "site": "https://stmichael.ru"},
         },
         # ─── Виды из окон по лотам (несколько источников на Я.Диске) ───
         # mode "id"        — папка лота содержит «_id: <ExternalId>» в названии;
@@ -160,6 +173,8 @@ PROJECTS = {
             "PB_EURO_SOURCE_B37",
             "https://pb7828.profitbase.ru/export/profitbase_xml/1ff0788c09898afd046dadeb3501e901?scheme=https",
         ),
+        # Готовый DomClick-экспорт ProfitBase (правильные id + контент) — enrich подменяет планировки/фото.
+        "pb_domclick_url": "https://pb7828.profitbase.ru/export/domclick/b0aac7a0775e1fdc34ab02274710f71d?scheme=https",
         "figma_template_url": os.environ.get(
             "FIGMA_TEMPLATE_URL_B37",
             "https://static.tildacdn.com/tild3735-3765-4137-a130-376363353730/plan-ksb.png",

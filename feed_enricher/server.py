@@ -23,7 +23,7 @@ from .enricher import enrich_lot, installment_values
 from .assembler import assemble_feed
 from .assembler_avito import assemble_avito_feed, enrich_pb_avito_feed
 from .assembler_yandex import assemble_yandex_feed, coords_from_avito
-from .assembler_domclick import assemble_domclick_feed
+from .assembler_domclick import assemble_domclick_feed, enrich_domclick_feed
 from .yadisk import sync_public_folder, sync_view_folders
 from . import commercial as comm
 
@@ -146,7 +146,16 @@ def _apply_euro_rooms(slug: str, lots: list):
 
 
 def _gen_domclick(slug, proj, coords, feeds_dir):
-    """Фид ДомКлик (родной формат «Домклик Новостройки») из выгрузки ProfitBase."""
+    """Фид ДомКлик. Приоритет — enrich готового DomClick-экспорта ProfitBase
+    (правильные id ЖК/корпусов + контент, мы меняем только планировки/фото);
+    иначе — сборка с нуля из profitbase_xml."""
+    url = proj.get("pb_domclick_url")
+    if url:
+        try:
+            enrich_domclick_feed(slug, download_feed(url), feeds_dir / "domclick.xml")
+        except Exception as e:
+            print(f"[{slug}] domclick (enrich) failed: {e}")
+        return
     if not (proj.get("domclick") and proj.get("euro_source_url")):
         return
     try:

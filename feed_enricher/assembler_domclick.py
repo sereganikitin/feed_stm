@@ -112,6 +112,40 @@ def _house(o):
             _gv(h, "built-year"), _gv(h, "ready-quarter"), _gv(h, "building-state"))
 
 
+def enrich_domclick_feed(slug: str, pbdc_bytes: bytes, out_path: Path) -> Path:
+    """Взять ГОТОВЫЙ DomClick-экспорт ProfitBase (правильные id ЖК/корпусов, валидный
+    формат, полный контент ЖК) и подменить: планировки квартир → наши брендовые
+    (/enriched по flat_id) и фото ЖК → наш набор с Я.Диска (extra_yandex).
+    Всё остальное (id, описание, офис продаж, застройщик, поля квартир) — из ProfitBase."""
+    root = ET.fromstring(pbdc_bytes)
+    edir = project_dirs(slug)["enriched"]
+    pdir = project_dirs(slug)["extra_yandex"]
+    our_imgs = [f"{PUBLIC_BASE_URL}/extra_yandex/{slug}/{file_ver(f)}/{f.name}"
+                for f in sorted(pdir.glob("*.jpg"))[:20]]
+    for cx in root.findall("complex"):
+        imgs = cx.find("images")           # фото ЖК → наш набор с ЯД
+        if imgs is not None and our_imgs:
+            for im in list(imgs):
+                imgs.remove(im)
+            for u in our_imgs:
+                ET.SubElement(imgs, "image").text = u
+        for fl in cx.findall(".//flat"):   # планировки → наши брендовые
+            fid = (fl.findtext("flat_id") or "").strip()
+            png = edir / f"{fid}.png"
+            if not png.exists():
+                continue
+            plans = fl.find("plans")
+            if plans is None:
+                plans = ET.SubElement(fl, "plans")
+            for p in list(plans):
+                plans.remove(p)
+            ET.SubElement(plans, "plan").text = \
+                f"{PUBLIC_BASE_URL}/enriched/{slug}/{file_ver(png)}/{fid}.png"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    ET.ElementTree(root).write(out_path, encoding="utf-8", xml_declaration=True)
+    return out_path
+
+
 def assemble_domclick_feed(slug: str, pbxml_bytes: bytes, coords: dict,
                            cfg: dict, out_path: Path) -> Path:
     """cfg = проект (get_project) с блоком cfg['domclick']."""

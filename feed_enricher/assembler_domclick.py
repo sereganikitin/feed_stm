@@ -185,6 +185,12 @@ def enrich_domclick_feed(slug: str, pbdc_bytes: bytes, out_path: Path, cfg: dict
                     wv.text = m
                 else:
                     fl.remove(wv)
+            ren = fl.find("renovation")     # пустая отделка → без отделки
+            if ren is not None and not (ren.text or "").strip():
+                ren.text = "без отделки"
+            liv = fl.find("living_area")    # пустая жилая площадь → убрать тег
+            if liv is not None and not (liv.text or "").strip():
+                fl.remove(liv)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     ET.ElementTree(root).write(out_path, encoding="utf-8", xml_declaration=True)
     return out_path

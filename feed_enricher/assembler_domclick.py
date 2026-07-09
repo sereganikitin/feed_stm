@@ -155,7 +155,7 @@ def assemble_domclick_feed(slug: str, pbxml_bytes: bytes, coords: dict,
             cond = ET.SubElement(conds, "condition")
             _e(cond, "kind", "cash"); _e(cond, "price", price)
             _e(f, "area", _gv(_sub(o, "area"), "value"))
-            _e(f, "kitchen_area", _cf(o, "Сайт.Кухня-гостиная"))
+            _e(f, "kitchen_area", _cf(o, "Сайт.Кухня-гостиная") or _cf(o, "Сайт.Площадь кухни, м2"))
             _e(f, "window_view", _gv(o, "window-view"))
             tour = _cf(o, "3D планировка")
             if tour.startswith("http"):

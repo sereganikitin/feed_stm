@@ -363,6 +363,14 @@ def _commercial_cards() -> list:
                                  "color": "#2563eb", "url": PUBLIC_BASE_URL + feed}],
                       "refresh": PUBLIC_BASE_URL + refr,
                       "preview": f"{PUBLIC_BASE_URL}/?feed={key}"})
+    # 3) Общий Avito-фид коммерции (Зорге + Б37, продажа + аренда) — конвертация из CIAN
+    from . import comm_avito
+    cards.append({"name": "Коммерция — Авито (общий)",
+                  "sub": "Зорге + Б37, продажа + аренда · конвертация из CIAN-фидов",
+                  "tiles": [{"plat": "Авито", "cnt": _count(comm_avito.OUT, "Ad"),
+                             "color": "#16a34a", "url": f"{PUBLIC_BASE_URL}/feed/comm/avito.xml"}],
+                  "refresh": f"{PUBLIC_BASE_URL}/refresh-comm-avito",
+                  "preview": None})
     return cards
 
 

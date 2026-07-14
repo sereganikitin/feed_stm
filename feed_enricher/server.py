@@ -380,6 +380,11 @@ def _refresh_loop():
             print(f"[auto-refresh-comm-zorge] {comm_zorge_cian.refresh()}")
         except Exception as e:
             print(f"[auto-refresh-comm-zorge] error: {e}")
+        try:
+            from . import comm_avito
+            print(f"[auto-refresh-comm-avito] {comm_avito.refresh()}")
+        except Exception as e:
+            print(f"[auto-refresh-comm-avito] error: {e}")
         time.sleep(REFRESH_INTERVAL_HOURS * 3600)
 
 
@@ -682,8 +687,13 @@ def serve_comm_rent_img_v(ver: str, name: str):
 
 @app.route("/refresh-comm-rent", methods=["POST"])
 def manual_refresh_comm_rent():
-    from . import comm_cian_rent
-    return jsonify(comm_cian_rent.refresh())
+    from . import comm_cian_rent, comm_avito
+    r = comm_cian_rent.refresh()
+    try:
+        comm_avito.refresh()   # общий Avito-коммерц фид держим в актуальном виде
+    except Exception as e:
+        print(f"[comm-avito] rebuild failed: {e}")
+    return jsonify(r)
 
 
 @app.route("/feed/comm/zorge-cian.xml")
@@ -720,8 +730,34 @@ def serve_comm_zorge_img_v(ver: str, name: str):
 
 @app.route("/refresh-comm-zorge", methods=["POST"])
 def manual_refresh_comm_zorge():
-    from . import comm_zorge_cian
-    return jsonify(comm_zorge_cian.refresh())
+    from . import comm_zorge_cian, comm_avito
+    r = comm_zorge_cian.refresh()
+    try:
+        comm_avito.refresh()
+    except Exception as e:
+        print(f"[comm-avito] rebuild failed: {e}")
+    return jsonify(r)
+
+
+@app.route("/feed/comm/avito.xml")
+def serve_comm_avito():
+    """ОБЩИЙ Avito-фид коммерции (Зорге + Б37, продажа + аренда)."""
+    from . import comm_avito
+    p = comm_avito.OUT
+    if not p.exists():
+        try:
+            comm_avito.refresh()
+        except Exception:
+            pass
+    if not p.exists():
+        abort(503)
+    return send_file(p, mimetype="application/xml")
+
+
+@app.route("/refresh-comm-avito", methods=["POST"])
+def manual_refresh_comm_avito():
+    from . import comm_avito
+    return jsonify(comm_avito.refresh())
 
 
 @app.route("/refresh-commercial", methods=["POST"])

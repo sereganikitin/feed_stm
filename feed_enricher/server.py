@@ -14,7 +14,7 @@ import requests
 from flask import Flask, send_file, abort, jsonify
 
 from .config import (
-    PROJECTS, project_dirs, ADMIN_DIR,
+    PROJECTS, project_dirs, ADMIN_DIR, CACHE_DIR,
     SERVE_HOST, SERVE_PORT, REFRESH_INTERVAL_HOURS,
     PB_API_TOKEN, PB_UPLOAD_URL,
 )
@@ -23,7 +23,7 @@ from .enricher import enrich_lot, installment_values
 from .assembler import assemble_feed
 from .assembler_avito import assemble_avito_feed, enrich_pb_avito_feed
 from .assembler_yandex import assemble_yandex_feed, coords_from_avito
-from .assembler_yandex_realty import assemble_yandex_realty_feed
+from .assembler_yandex_realty import assemble_yandex_realty_feed, assemble_yandex_realty_combined
 from .assembler_domclick import assemble_domclick_feed, enrich_domclick_feed
 from .yadisk import sync_public_folder, sync_view_folders
 from . import commercial as comm
@@ -146,6 +146,36 @@ def _apply_euro_rooms(slug: str, lots: list):
         print(f"[{slug}] европланировки: комнатность −1 у {n} лотов")
 
 
+# Общий фид «Яндекс Поиск Недвижимости» (metarealty/2024-12) по всем жилым проектам
+# (Зорге апарты + Б37 квартиры) одним XML — коммерцию не включает.
+COMBINED_YR_PATH = CACHE_DIR / "combined" / "yandex_realty.xml"
+
+
+def _gen_combined_yandex_realty():
+    """Пересобрать общий Я.Поиск фид из кэша всех жилых проектов с привязкой к Яндексу.
+    Каждый оффер несёт свой yandex-building-id/house-id → Яндекс раскидывает по ЖК."""
+    items = []
+    for slug, proj in PROJECTS.items():
+        if not proj.get("yandex_building_id"):
+            continue  # только жилые проекты с Яндекс-привязкой (коммерция сюда не входит)
+        d = project_dirs(slug)
+        cian = d["feeds"] / "original.xml"
+        if not cian.exists():
+            continue
+        lots = parse_feed(cian.read_bytes())
+        _apply_euro_rooms(slug, lots)
+        av = d["feeds"] / "original_avito.xml"
+        coords = coords_from_avito(av.read_bytes()) if av.exists() else {}
+        items.append((slug, lots, coords))
+    if not items:
+        return
+    now = time.strftime("%Y-%m-%dT%H:%M:%S+03:00")
+    try:
+        assemble_yandex_realty_combined(items, COMBINED_YR_PATH, now)
+    except Exception as e:
+        print(f"[combined] yandex-realty feed failed: {e}")
+
+
 def _gen_domclick(slug, proj, coords, feeds_dir):
     """Фид ДомКлик. Приоритет — enrich готового DomClick-экспорта ProfitBase
     (правильные id ЖК/корпусов + контент, мы меняем только планировки/фото);
@@ -192,6 +222,7 @@ def resync_views(slug: str):
             assemble_yandex_feed(slug, lots, coords, d["feeds"] / "yandex.xml", now)
             assemble_yandex_realty_feed(slug, lots, coords, d["feeds"] / "yandex_realty.xml", now)
             _gen_domclick(slug, proj, coords, d["feeds"])
+            _gen_combined_yandex_realty()
         vdir = d["views"]
         lots_with_views = sum(1 for sub in vdir.iterdir()
                               if sub.is_dir() and any(sub.glob("*.jpg"))) if vdir.exists() else 0
@@ -292,6 +323,7 @@ def refresh_project(slug: str) -> dict:
             assemble_yandex_feed(slug, lots, coords, dirs["feeds"] / "yandex.xml", now)
             assemble_yandex_realty_feed(slug, lots, coords, dirs["feeds"] / "yandex_realty.xml", now)
             _gen_domclick(slug, proj, coords, dirs["feeds"])
+            _gen_combined_yandex_realty()
         # Опционально пушим копию в ProfitBase
         uploaded = False
         if PB_UPLOAD_URL and PB_API_TOKEN:
@@ -465,6 +497,17 @@ def serve_feed_yandex(slug: str):
     if not p.exists():
         abort(503)
     return send_file(p, mimetype="application/xml")
+
+
+@app.route("/feed/yandex-realty.xml")
+def serve_feed_yandex_realty_all():
+    # ОБЩИЙ «Яндекс Поиск Недвижимости» (metarealty/2024-12): Зорге + Б37 одним файлом.
+    # Статичный роут регистрируем раньше слаг-роута, чтобы не перехватывался.
+    if not COMBINED_YR_PATH.exists():
+        _gen_combined_yandex_realty()
+    if not COMBINED_YR_PATH.exists():
+        abort(503)
+    return send_file(COMBINED_YR_PATH, mimetype="application/xml")
 
 
 @app.route("/feed/<slug>-yandex-realty.xml")

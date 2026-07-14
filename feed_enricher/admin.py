@@ -24,9 +24,12 @@ from flask import (Blueprint, abort, flash, jsonify, redirect, render_template_s
                    request, session, url_for)
 from werkzeug.utils import secure_filename
 
-from .config import (PROJECTS, PUBLIC_BASE_URL, ADMIN_DIR, project_dirs,
+from .config import (PROJECTS, PUBLIC_BASE_URL, ADMIN_DIR, CACHE_DIR, project_dirs,
                      get_project, set_override, load_overrides,
                      excluded_photos, add_excluded_photo)
+
+# Общий Я.Поиск фид (Зорге + Б37 одним файлом) — путь синхронен server.COMBINED_YR_PATH
+_COMBINED_YR = CACHE_DIR / "combined" / "yandex_realty.xml"
 from .yadisk import save_resized_jpeg, sync_public_folder
 from .assembler_avito import enrich_pb_avito_feed
 from .assembler_yandex import assemble_yandex_feed, coords_from_avito, _korpus_no
@@ -145,6 +148,11 @@ def _rebuild_yandex(slug: str) -> None:
     now = time.strftime("%Y-%m-%dT%H:%M:%S+03:00")
     assemble_yandex_feed(slug, lots, coords, d["feeds"] / "yandex.xml", now)
     assemble_yandex_realty_feed(slug, lots, coords, d["feeds"] / "yandex_realty.xml", now)
+    try:
+        from .server import _gen_combined_yandex_realty
+        _gen_combined_yandex_realty()   # общий фид держим в актуальном состоянии
+    except Exception as e:
+        print(f"[{slug}] combined yandex-realty rebuild failed: {e}")
 
 
 def _rebuild_cian(slug: str) -> None:
@@ -318,7 +326,7 @@ def dashboard():
             "health": _feed_health(slug),
         })
     return render_template_string(_DASH_HTML, rows=rows, comm_cards=_commercial_cards(),
-                                  base=PUBLIC_BASE_URL)
+                                  combined_yr=_count(_COMBINED_YR, "offer"), base=PUBLIC_BASE_URL)
 
 
 # метаданные площадок для карточек коммерции: (подпись, тег для подсчёта, цвет)
@@ -820,6 +828,24 @@ _DASH_HTML = _CSS + """<title>Фиды</title>
  </div>
 </div>
 {% endfor %}
+
+<div class=sec-h>📡 Общий фид для Яндекс Поиск Недвижимости</div>
+<p class=muted style="margin:0 0 14px">Новый формат Яндекса, <b>Зорге + Б37 в одном файле</b> (только квартиры и апартаменты). Эту ссылку и даём Яндексу — он сам раскидывает лоты по нужным ЖК. Отдельные фиды по проектам выше тоже остаются.</p>
+<div class=pcard>
+ <div class=pcard-head>
+  <div>
+   <div class=pcard-title>Яндекс Поиск — общий фид</div>
+   <div class=pcard-sub>Зорге 9 (апартаменты) + Квартал Серебряный Бор (квартиры)</div>
+  </div>
+ </div>
+ <div class=feeds>
+  <a class="feed{% if not combined_yr %} empty{% endif %}" style="--c:#f59e0b" href="{{base}}/feed/yandex-realty.xml" target=_blank>
+   <div class=plat>Я.Поиск (общий)</div>
+   <div class=cnt>{{combined_yr or '—'}}</div>
+   <div class=lnk>открыть XML ↗</div>
+  </a>
+ </div>
+</div>
 
 <div class=sec-h>🏢 Коммерческие помещения</div>
 <p class=muted style="margin:0 0 14px">Фиды нежилых помещений — офисы, торговля, аренда.</p>

@@ -75,8 +75,9 @@ def _bathroom(comb: int, sep: int) -> str:
     return ""
 
 
-def assemble_yandex_realty_feed(slug: str, lots: list[FeedLot], coords: dict,
-                                out_path: Path, generation_date: str) -> Path:
+def _add_project_offers(root, slug: str, lots: list[FeedLot], coords: dict) -> None:
+    """Добавить <offer> всех лотов проекта в уже созданный root (namespace на root).
+    Используется и одиночным фидом проекта, и общим фидом нескольких проектов."""
     proj = get_project(slug)
     dirs = project_dirs(slug)
     enriched_dir = dirs["enriched"]
@@ -90,10 +91,6 @@ def assemble_yandex_realty_feed(slug: str, lots: list[FeedLot], coords: dict,
     order = [n for n in (proj.get("extra_photo_order_yandex") or []) if n in pfiles]
     photo_names = order + sorted(set(pfiles) - set(order))
     photo_urls  = [f"{PUBLIC_BASE_URL}/extra_yandex/{slug}/{file_ver(pfiles[n])}/{n}" for n in photo_names]
-
-    root = ET.Element("realty-feed")
-    root.set("xmlns", NS)
-    _e(root, "generation-date", generation_date)
 
     for lot in lots:
         if not (lot.price and lot.area_total):
@@ -188,7 +185,31 @@ def assemble_yandex_realty_feed(slug: str, lots: list[FeedLot], coords: dict,
             _e(o, "ceiling-height", ch)
         _e(o, "building-state", "hand-over" if lot.building_complete else "unfinished")
 
+
+def _write(root, out_path: Path) -> Path:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     ET.indent(root)
     ET.ElementTree(root).write(out_path, encoding="utf-8", xml_declaration=True)
     return out_path
+
+
+def assemble_yandex_realty_feed(slug: str, lots: list[FeedLot], coords: dict,
+                                out_path: Path, generation_date: str) -> Path:
+    """Одиночный фид проекта (metarealty/2024-12)."""
+    root = ET.Element("realty-feed")
+    root.set("xmlns", NS)
+    _e(root, "generation-date", generation_date)
+    _add_project_offers(root, slug, lots, coords)
+    return _write(root, out_path)
+
+
+def assemble_yandex_realty_combined(items, out_path: Path, generation_date: str) -> Path:
+    """Один ОБЩИЙ фид metarealty из нескольких проектов (Зорге + Б37).
+    items: [(slug, lots, coords), ...]. Каждый оффер несёт свой yandex-building-id/
+    house-id, поэтому Яндекс сам раскидывает лоты по нужным ЖК."""
+    root = ET.Element("realty-feed")
+    root.set("xmlns", NS)
+    _e(root, "generation-date", generation_date)
+    for slug, lots, coords in items:
+        _add_project_offers(root, slug, lots, coords)
+    return _write(root, out_path)

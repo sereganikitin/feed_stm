@@ -15,13 +15,15 @@ ObjectType). После сборки прогнать через валидат�
 загрузку в кабинете) и доправить по факту. Габариты (Width/Length), Layout — не
 заполняем (нет данных / условно-обязательны), уточняем по валидатору.
 """
+import json
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from .config import CACHE_DIR
+from .config import CACHE_DIR, ADMIN_DIR
 from . import comm_zorge_cian, comm_cian_rent
 
 OUT = CACHE_DIR / "comm_avito" / "avito.xml"
+SETTINGS_PATH = ADMIN_DIR / "comm_avito.json"   # редактируемые дефолты (из панели)
 
 # Источники — готовые CIAN-фиды коммерции
 SOURCES = [comm_zorge_cian.OUT, comm_cian_rent.OUT]
@@ -45,7 +47,8 @@ CAT_OBJ = {
 }
 
 # Разумные дефолты для обязательных полей-атрибутов, которых нет в ProfitBase
-# (премиальный ЖК, коммерция на 1-х этажах). Меняются здесь.
+# (премиальный ЖК, коммерция на 1-х этажах). Правятся из панели (SETTINGS_PATH),
+# перекрывая эти значения; DEFAULTS — фолбэк.
 DEFAULTS = {
     "PropertyRights": "Собственник",
     "Decoration":     "Без отделки",
@@ -55,9 +58,58 @@ DEFAULTS = {
     "Lighting":       "Есть",
     "PowerSockets":   "Есть",
     "Heating":        "Есть",
-    "BuildingType":   "Жилой дом",   # для отдельных зданий — «Другой» (см. _obj)
+    "BuildingType":   "Жилой дом",   # для отдельных зданий — «Другой» (см. _add_ad)
     "ContactMethod":  "По телефону и в сообщениях",
 }
+
+# Допустимые значения (из справочника Авито) — для выпадающих списков в панели
+# и валидации сохраняемого. Порядок ключей = порядок в форме.
+CHOICES = {
+    "Decoration":     ["Без отделки", "Чистовая", "Офисная"],
+    "BuildingType":   ["Жилой дом", "Бизнес-центр", "Торговый центр", "Административное здание", "Другой"],
+    "Security":       ["Есть", "Нет"],
+    "AccessSchedule": ["24/7", "По графику"],
+    "CarAccess":      ["Есть", "Нет"],
+    "Lighting":       ["Есть", "Нет"],
+    "PowerSockets":   ["Есть", "Нет"],
+    "Heating":        ["Есть", "Нет", "Центральное", "Автономное"],
+    "PropertyRights": ["Собственник", "Посредник"],
+    "ContactMethod":  ["По телефону и в сообщениях", "По телефону", "В сообщениях"],
+}
+# Человеческие подписи полей для панели
+LABELS = {
+    "Decoration":     "Отделка",
+    "BuildingType":   "Тип здания (для отдельных зданий — всегда «Другой»)",
+    "Security":       "Охрана",
+    "AccessSchedule": "Доступ",
+    "CarAccess":      "Подъезд для автомобиля",
+    "Lighting":       "Освещение",
+    "PowerSockets":   "Электрические розетки",
+    "Heating":        "Отопление",
+    "PropertyRights": "Права на объект",
+    "ContactMethod":  "Способ связи",
+}
+
+
+def load_settings() -> dict:
+    try:
+        return json.loads(SETTINGS_PATH.read_text("utf-8"))
+    except Exception:
+        return {}
+
+
+def save_settings(d: dict) -> None:
+    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SETTINGS_PATH.write_text(json.dumps(d, ensure_ascii=False, indent=2), "utf-8")
+
+
+def settings() -> dict:
+    """Итоговые значения атрибутов: сохранённые в панели поверх DEFAULTS."""
+    d = dict(DEFAULTS)
+    for k, v in load_settings().items():
+        if k in CHOICES and v in CHOICES[k]:
+            d[k] = v
+    return d
 
 
 def _op_and_base(category: str):
@@ -98,7 +150,7 @@ def _phone(o) -> str:
     return "+" + digits if digits else ""
 
 
-def _add_ad(root, o) -> bool:
+def _add_ad(root, o, cfg) -> bool:
     cat = (o.findtext("Category") or "").strip()
     ext = (o.findtext("ExternalId") or "").strip()
     area = (o.findtext("TotalArea") or "").strip()
@@ -142,20 +194,20 @@ def _add_ad(root, o) -> bool:
     # Продажа: тип сделки
     if op == "Продам":
         T("TransactionType", "Продажа")
-    # Атрибуты-дефолты
-    T("PropertyRights", DEFAULTS["PropertyRights"])
-    T("Decoration",     DEFAULTS["Decoration"])
-    T("Security",       DEFAULTS["Security"])
-    T("AccessSchedule", DEFAULTS["AccessSchedule"])
-    T("CarAccess",      DEFAULTS["CarAccess"])
-    T("Lighting",       DEFAULTS["Lighting"])
-    T("PowerSockets",   DEFAULTS["PowerSockets"])
-    T("Heating",        DEFAULTS["Heating"])
-    T("BuildingType", "Другой" if base == "building" else DEFAULTS["BuildingType"])
+    # Атрибуты (из настроек панели поверх дефолтов)
+    T("PropertyRights", cfg["PropertyRights"])
+    T("Decoration",     cfg["Decoration"])
+    T("Security",       cfg["Security"])
+    T("AccessSchedule", cfg["AccessSchedule"])
+    T("CarAccess",      cfg["CarAccess"])
+    T("Lighting",       cfg["Lighting"])
+    T("PowerSockets",   cfg["PowerSockets"])
+    T("Heating",        cfg["Heating"])
+    T("BuildingType", "Другой" if base == "building" else cfg["BuildingType"])
     # Контакты
     T("ContactPhone", _phone(o))
     T("ManagerName", MANAGER)
-    T("ContactMethod", DEFAULTS["ContactMethod"])
+    T("ContactMethod", cfg["ContactMethod"])
     # Картинки
     im = ET.SubElement(ad, "Images")
     for u in imgs[:40]:
@@ -164,6 +216,7 @@ def _add_ad(root, o) -> bool:
 
 
 def refresh() -> dict:
+    cfg = settings()
     root = ET.Element("Ads", {"formatVersion": "3", "target": "Avito.ru"})
     n = 0
     for src in SOURCES:
@@ -175,7 +228,7 @@ def refresh() -> dict:
             print(f"[comm-avito] parse {src} failed: {e}")
             continue
         for o in croot.findall("object"):
-            if _add_ad(root, o):
+            if _add_ad(root, o, cfg):
                 n += 1
     OUT.parent.mkdir(parents=True, exist_ok=True)
     ET.indent(root)

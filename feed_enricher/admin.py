@@ -370,6 +370,7 @@ def _commercial_cards() -> list:
                   "tiles": [{"plat": "Авито", "cnt": _count(comm_avito.OUT, "Ad"),
                              "color": "#16a34a", "url": f"{PUBLIC_BASE_URL}/feed/comm/avito.xml"}],
                   "refresh": f"{PUBLIC_BASE_URL}/refresh-comm-avito",
+                  "settings": url_for("admin.comm_avito_settings"),
                   "preview": None})
     return cards
 
@@ -433,6 +434,35 @@ def commercial_page():
             n = 0
         dedicated.append({"key": key, "name": name, "refresh": refr, "feed": feed, "n": n})
     return render_template_string(_COMM_HTML, rows=rows, dedicated=dedicated, base=PUBLIC_BASE_URL)
+
+
+@admin_bp.route("/comm-avito")
+@login_required
+def comm_avito_settings():
+    from . import comm_avito
+    return render_template_string(
+        _COMM_AVITO_HTML, base=PUBLIC_BASE_URL,
+        fields=list(comm_avito.CHOICES.keys()),
+        choices=comm_avito.CHOICES, labels=comm_avito.LABELS,
+        current=comm_avito.settings())
+
+
+@admin_bp.route("/comm-avito/save", methods=["POST"])
+@login_required
+def comm_avito_save():
+    from . import comm_avito
+    cur = comm_avito.load_settings()
+    for k, allowed in comm_avito.CHOICES.items():
+        v = request.form.get(k, "").strip()
+        if v in allowed:
+            cur[k] = v
+    comm_avito.save_settings(cur)
+    try:
+        r = comm_avito.refresh()
+        flash(f"Атрибуты сохранены. Avito-фид коммерции пересобран: объявлений {r.get('ads')}.")
+    except Exception as e:
+        flash(f"Сохранено, но пересборка не удалась: {e}")
+    return redirect(url_for("admin.comm_avito_settings"))
 
 
 @admin_bp.route("/commercial/save", methods=["POST"])
@@ -865,6 +895,7 @@ _DASH_HTML = _CSS + """<title>Фиды</title>
    <div class=pcard-sub>{{c.sub}}</div>
   </div>
   <div class=head-actions>
+   {% if c.settings %}<a class="btn gray" href="{{c.settings}}">⚙️ Атрибуты</a>{% endif %}
    {% if c.preview %}<a class="btn gray" href="{{c.preview}}" target=_blank>👁 Превью</a>{% endif %}
    <form method=post action="{{c.refresh}}" style="margin:0"><button class="btn green">↻ Обновить</button></form>
   </div>
@@ -1009,6 +1040,28 @@ _COMM_HTML = _CSS + """<title>Коммерческие фиды</title>
  </form>
  <p class=muted style="margin-top:10px">⚠️ Коммерческие схемы площадок строже жилья — после формирования прогоните фид через валидатор площадки (например autoload.avito.ru/format/xmlcheck). Обогащённые планировки — на шаблоне с подписями Площадь/Высота/Мощность.</p>
 </div>
+<p class=muted><a href="{{url_for('admin.logout')}}">Выйти</a></p>"""
+
+_COMM_AVITO_HTML = _CSS + """<title>Авито-коммерция — атрибуты</title>
+<p><a href="{{url_for('admin.dashboard')}}">← все фиды</a></p>
+<h1>Авито-коммерция — атрибуты по умолчанию</h1>""" + _FLASH + """
+<div class=card>
+ <p style="margin-top:0">Эти значения проставляются во <b>все объявления</b> Avito-коммерции (Зорге + Б37) — в обязательные поля Авито, которых нет в ProfitBase. Меняешь → фид сразу пересобирается.</p>
+ <form method=post action="{{url_for('admin.comm_avito_save')}}">
+  <div class=row>
+  {% for k in fields %}
+   <div class=col style="min-width:230px;flex:0 0 230px">
+    <label>{{labels[k]}}</label>
+    <select name="{{k}}">
+     {% for opt in choices[k] %}<option {% if current[k]==opt %}selected{% endif %}>{{opt}}</option>{% endfor %}
+    </select>
+   </div>
+  {% endfor %}
+  </div>
+  <div style="margin-top:18px"><button class=btn>Сохранить и пересобрать фид</button></div>
+ </form>
+</div>
+<p class=muted>Габариты (Width/Length) и Layout не заполняются — уточняются по отчёту валидатора Авито. Отдельно стоящие здания всегда получают тип «Другой» независимо от выбора выше.</p>
 <p class=muted><a href="{{url_for('admin.logout')}}">Выйти</a></p>"""
 
 _PROJ_HTML = _CSS + """<title>{{proj.name}}</title>

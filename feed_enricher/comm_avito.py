@@ -150,6 +150,38 @@ def _phone(o) -> str:
     return "+" + digits if digits else ""
 
 
+def _add_garage_ad(root, ext, area, price, imgs, desc, addr, floor, op, phone) -> bool:
+    """Машиноместо → Avito-категория «Гаражи и машиноместа» (отдельная от коммерции)."""
+    ad = ET.SubElement(root, "Ad")
+
+    def T(tag, val):
+        if val is None or str(val).strip() == "":
+            return
+        ET.SubElement(ad, tag).text = str(val)
+
+    T("Id", ext)
+    T("Category", "Гаражи и машиноместа")
+    T("OperationType", op)
+    T("ObjectType", "Машиноместо")
+    T("Title", f"Машиноместо, {area} м²"[:50])
+    T("Description", desc)
+    T("Address", addr)
+    try:
+        T("Price", int(round(float(price))))
+    except ValueError:
+        T("Price", price)
+    T("Square", area)
+    if floor:
+        T("Floor", floor)
+    T("ContactPhone", phone)
+    T("ManagerName", MANAGER)
+    T("ContactMethod", "По телефону и в сообщениях")
+    im = ET.SubElement(ad, "Images")
+    for u in imgs[:40]:
+        ET.SubElement(im, "Image", {"url": u})
+    return True
+
+
 def _add_ad(root, o, cfg) -> bool:
     cat = (o.findtext("Category") or "").strip()
     ext = (o.findtext("ExternalId") or "").strip()
@@ -162,6 +194,10 @@ def _add_ad(root, o, cfg) -> bool:
         return False
 
     op, base = _op_and_base(cat)
+    # Машиноместа/гаражи — своя Avito-категория (не «Коммерческая недвижимость»)
+    if base == "garage":
+        floor = (o.findtext("FloorNumber") or "").strip()
+        return _add_garage_ad(root, ext, area, price, imgs, desc, addr, floor, op, _phone(o))
     specs = [s.text.strip() for s in o.findall("Specialty/Types/String") if s.text]
     obj = _obj_type(base, specs)
 

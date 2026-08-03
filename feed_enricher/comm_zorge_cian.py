@@ -298,7 +298,15 @@ def refresh():
             ps = ET.SubElement(photos, "PhotoSchema")
             _T(ps, "FullUrl", u); _T(ps, "IsDefault", "0")
 
+    # Машиноместа (Category=garageSale) — из отдельного фида паркинга (задача клиента)
+    n_park = 0
+    try:
+        from . import comm_parking
+        n_park = comm_parking.append_cian(root)
+    except Exception as e:
+        print(f"[comm-zorge] parking append failed: {e}")
+
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     ET.indent(root)
     ET.ElementTree(root).write(OUT, encoding="utf-8", xml_declaration=True)
-    return {"sale": n_sale, "rent": n_rent, "total": n_sale + n_rent}
+    return {"sale": n_sale, "rent": n_rent, "parking": n_park, "total": n_sale + n_rent + n_park}

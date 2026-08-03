@@ -153,7 +153,12 @@ def _phone(o) -> str:
     return "+" + digits if digits else ""
 
 
-def _add_garage_ad(root, ext, area, price, imgs, desc, addr, floor, op, phone) -> bool:
+# Тип машиноместа (Avito ObjectSubtype) — ПРЕДПОЛОЖЕНИЕ, уточнить по шаблону
+# «Гаражи и машиноместа». Место в подземном паркинге = открытое.
+GARAGE_SUBTYPE = "Открытое"
+
+
+def _add_garage_ad(root, ext, area, price, imgs, desc, addr, floor, op, phone, cfg) -> bool:
     """Машиноместо → Avito-категория «Гаражи и машиноместа» (отдельная от коммерции)."""
     ad = ET.SubElement(root, "Ad")
 
@@ -166,6 +171,7 @@ def _add_garage_ad(root, ext, area, price, imgs, desc, addr, floor, op, phone) -
     T("Category", "Гаражи и машиноместа")
     T("OperationType", op)
     T("ObjectType", "Машиноместо")
+    T("ObjectSubtype", GARAGE_SUBTYPE)   # Тип машиноместа (обязательный)
     T("Title", f"Машиноместо, {area} м²"[:50])
     T("Description", desc)
     T("Address", addr)
@@ -176,6 +182,9 @@ def _add_garage_ad(root, ext, area, price, imgs, desc, addr, floor, op, phone) -
     T("Square", area)
     if floor:
         T("Floor", floor)
+    # Обязательные для гаражной категории (по отчёту валидатора)
+    T("PropertyRights", cfg["PropertyRights"])
+    T("Security", cfg["Security"])
     T("ContactPhone", phone)
     T("ManagerName", MANAGER)
     T("ContactMethod", "По телефону и в сообщениях")
@@ -200,7 +209,7 @@ def _add_ad(root, o, cfg) -> bool:
     # Машиноместа/гаражи — своя Avito-категория (не «Коммерческая недвижимость»)
     if base == "garage":
         floor = (o.findtext("FloorNumber") or "").strip()
-        return _add_garage_ad(root, ext, area, price, imgs, desc, addr, floor, op, _phone(o))
+        return _add_garage_ad(root, ext, area, price, imgs, desc, addr, floor, op, _phone(o), cfg)
     specs = [s.text.strip() for s in o.findall("Specialty/Types/String") if s.text]
     obj = _obj_type(base, specs)
 

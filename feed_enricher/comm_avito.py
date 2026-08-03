@@ -60,7 +60,8 @@ DEFAULTS = {
     "Heating":        "Центральное",  # Авито НЕ принимает «Есть» для Heating (только цент./автон./нет)
     "ParkingType":    "В здании",     # обязательный параметр Авито (Парковка)
     "Entrance":       "С улицы",       # Вход (для аренды обязателен)
-    "RentalType":     "Прямая аренда",  # Тип аренды (аренда, обязателен) — уточнить по справочнику
+    "RentalType":     "Прямая",         # Тип аренды (аренда, обязателен)
+    "RentPriceType":  "в месяц",         # Размерность цены аренды (цена за всё помещение в месяц)
     "BuildingType":   "Жилой дом",   # для отдельных зданий — «Другой» (см. _add_ad)
     "ContactMethod":  "По телефону и в сообщениях",
 }
@@ -78,7 +79,8 @@ CHOICES = {
     "Heating":        ["Центральное", "Автономное", "Нет"],
     "ParkingType":    ["На улице", "В здании", "Нет"],
     "Entrance":       ["С улицы", "Со двора"],
-    "RentalType":     ["Прямая аренда", "Субаренда"],
+    "RentalType":     ["Прямая", "Субаренда"],
+    "RentPriceType":  ["в месяц", "в месяц за м2", "в год", "в год за м2", "в месяц за рабочее место"],
     "PropertyRights": ["Собственник", "Посредник"],
     "ContactMethod":  ["По телефону и в сообщениях", "По телефону", "В сообщениях"],
 }
@@ -95,6 +97,7 @@ LABELS = {
     "ParkingType":    "Парковка",
     "Entrance":       "Вход (аренда)",
     "RentalType":     "Тип аренды",
+    "RentPriceType":  "Размерность цены (аренда)",
     "PropertyRights": "Права на объект",
     "ContactMethod":  "Способ связи",
 }
@@ -159,9 +162,9 @@ def _phone(o) -> str:
     return "+" + digits if digits else ""
 
 
-# Тип машиноместа (Avito ObjectSubtype) — ПРЕДПОЛОЖЕНИЕ, уточнить по шаблону
-# «Гаражи и машиноместа». Место в подземном паркинге = открытое.
-GARAGE_SUBTYPE = "Открытое"
+# Тип машиноместа (Avito ObjectSubtype). Допустимые: Многоуровневый паркинг /
+# Подземный паркинг / Крытая стоянка / Открытая стоянка. Наши места — подземный паркинг.
+GARAGE_SUBTYPE = "Подземный паркинг"
 
 
 def _add_garage_ad(root, ext, area, price, imgs, desc, addr, op, phone, cfg) -> bool:
@@ -234,8 +237,7 @@ def _add_ad(root, o, cfg) -> bool:
         T("Price", int(round(float(price))))
     except ValueError:
         T("Price", price)
-    if op == "Продам":
-        T("PriceType", "за всё")   # у аренды (Сдам) своя размерность цены — не шлём «за всё»
+    T("PriceType", "за всё" if op == "Продам" else cfg["RentPriceType"])  # аренда: «в месяц»
     T("Square", area)
     floor = (o.findtext("FloorNumber") or "").strip()
     if floor:

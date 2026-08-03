@@ -60,6 +60,7 @@ DEFAULTS = {
     "Heating":        "Центральное",  # Авито НЕ принимает «Есть» для Heating (только цент./автон./нет)
     "ParkingType":    "В здании",     # обязательный параметр Авито (Парковка)
     "Entrance":       "С улицы",       # Вход (для аренды обязателен)
+    "RentalType":     "Прямая аренда",  # Тип аренды (аренда, обязателен) — уточнить по справочнику
     "BuildingType":   "Жилой дом",   # для отдельных зданий — «Другой» (см. _add_ad)
     "ContactMethod":  "По телефону и в сообщениях",
 }
@@ -77,6 +78,7 @@ CHOICES = {
     "Heating":        ["Центральное", "Автономное", "Нет"],
     "ParkingType":    ["На улице", "В здании", "Нет"],
     "Entrance":       ["С улицы", "Со двора"],
+    "RentalType":     ["Прямая аренда", "Субаренда"],
     "PropertyRights": ["Собственник", "Посредник"],
     "ContactMethod":  ["По телефону и в сообщениях", "По телефону", "В сообщениях"],
 }
@@ -92,6 +94,7 @@ LABELS = {
     "Heating":        "Отопление",
     "ParkingType":    "Парковка",
     "Entrance":       "Вход (аренда)",
+    "RentalType":     "Тип аренды",
     "PropertyRights": "Права на объект",
     "ContactMethod":  "Способ связи",
 }
@@ -253,7 +256,8 @@ def _add_ad(root, o, cfg) -> bool:
     T("Heating",        cfg["Heating"])
     T("ParkingType",    cfg["ParkingType"])
     if op == "Сдам":
-        T("Entrance", cfg["Entrance"])   # Вход — обязателен для аренды
+        T("Entrance", cfg["Entrance"])       # Вход — обязателен для аренды
+        T("RentalType", cfg["RentalType"])   # Тип аренды — обязателен для аренды
     T("BuildingType", "Другой" if base == "building" else cfg["BuildingType"])
     # Контакты
     T("ContactPhone", _phone(o))

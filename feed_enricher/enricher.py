@@ -11,12 +11,14 @@
 Шаблон уже содержит все статичные надписи (метки, бренд, "ОТ 10%" и т.п.) —
 ничего дополнительного НЕ рисуем. Дубль текста с титром был убран в этой версии.
 """
-import hashlib, requests
+import hashlib, re, requests
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from .config import PROJECTS, project_dirs, get_project
 from .parser import FeedLot
+
+_ASSET_TPL = Path(__file__).parent / "assets" / "templates"
 
 
 # ──────────────── загрузка картинок с кэшированием ────────────────
@@ -36,6 +38,20 @@ def get_template(slug: str) -> Image.Image:
         raise RuntimeError(f"figma_template_url не задан для проекта {slug}")
     ext = proj.get("template_ext", "jpg")
     return _http_get_image(proj["figma_template_url"], dirs["templates"] / f"template.{ext}")
+
+
+def get_template_for(slug: str, lot: FeedLot) -> Image.Image:
+    """Шаблон под конкретный лот. Б37: локальные шаблоны студии/квартиры
+    (proj['template_studio'|'template_default'] в assets/templates). Студия — lot.rooms==0.
+    Фолбэк — общий figma_template_url (get_template)."""
+    proj = PROJECTS[slug]
+    studio = getattr(lot, "rooms", None) == 0
+    name = proj.get("template_studio") if studio else proj.get("template_default")
+    if name:
+        p = _ASSET_TPL / name
+        if p.exists():
+            return Image.open(p).convert("RGBA")
+    return get_template(slug)
 
 
 def get_original_plan(slug: str, plan_url: str) -> Image.Image:
@@ -177,8 +193,8 @@ def enrich_lot(slug: str, lot: FeedLot) -> Path:
     if out_path.exists():
         return out_path
 
-    # Фон — шаблон, приведённый к нужному размеру
-    canvas = get_template(slug).convert("RGBA").resize(layout["size"], Image.LANCZOS)
+    # Фон — шаблон (для Б37 свой под студии/квартиры), приведённый к нужному размеру
+    canvas = get_template_for(slug, lot).convert("RGBA").resize(layout["size"], Image.LANCZOS)
 
     # Планировка → в plan_box, сохраняя пропорции
     if lot.plan_url:
@@ -210,6 +226,15 @@ def enrich_lot(slug: str, lot: FeedLot) -> Path:
         _draw_field(draw, layout["area_value"], _area_label(lot.area_total))
     if "rooms_value" in layout:
         _draw_field(draw, layout["rooms_value"], _rooms_label(lot))
+
+    # Название башни под плашками (Б37): № корпуса → башня из proj['tower_by_korpus']
+    tv = layout.get("tower_value")
+    towers = proj.get("tower_by_korpus")
+    if tv and towers:
+        m = re.search(r"\d+", lot.house_name or "")
+        tower = towers.get(int(m.group())) if m else None
+        if tower:
+            _draw_field(draw, tv, f"{tower} БАШНЯ")
 
     # Рассрочка — только если в проекте есть installment + поля на шаблоне
     if proj.get("installment") and lot.price and "down_payment" in layout:

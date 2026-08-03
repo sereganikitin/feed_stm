@@ -16,6 +16,13 @@ PARKING_FEED_URL = "https://pb7828.profitbase.ru/export/profitbase_xml/4afc254ce
 ADDRESS = "Москва, ул. Зорге, дом 9"
 PHONE   = "+74952924193"
 
+# Гаражная категория ЦИАН: <Garage> = Type + GarageType + Status (+Material).
+# Пример из доки ЦИАН: <Type>box</Type><GarageType>builtIn</GarageType><Status>byProxy</Status>.
+# Значения для МАШИНОМЕСТА — предположения (доки ЦИАН за капчей), уточнить по отчёту кабинета.
+GARAGE_TYPE   = "parkingPlace"   # <Type>: машиноместо
+GARAGE_KIND   = "builtIn"        # <GarageType>: встроенный (подземный паркинг в доме)
+GARAGE_STATUS = "ownership"      # <Status>: в собственности
+
 # Что выводим: (ExternalId в фиде, [номера мест], семейное?)
 # Семейное = смежная пара, продаётся одним лотом (площадь и цена суммируются).
 LOTS = [
@@ -116,9 +123,11 @@ def append_cian(root) -> int:
         _T(o, "TotalArea", area)
         if lot["floor"]:
             _T(o, "FloorNumber", lot["floor"])
-        # Блок гаража/машиноместа (тип — parking = машиноместо)
+        # Блок гаража ЦИАН: Type (машиноместо) + GarageType (конструктив) + Status (право)
         g = ET.SubElement(o, "Garage")
-        _T(g, "GarageType", "parking")
+        _T(g, "Type", GARAGE_TYPE)
+        _T(g, "GarageType", GARAGE_KIND)
+        _T(g, "Status", GARAGE_STATUS)
         # Цена
         bt = ET.SubElement(o, "BargainTerms")
         _T(bt, "Price", lot["price"])

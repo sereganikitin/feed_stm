@@ -189,8 +189,9 @@ def _add_garage_ad(root, ext, area, price, imgs, desc, addr, op, phone, cfg) -> 
     T("PropertyRights", cfg["PropertyRights"])
     T("ObjectType", "Машиноместо")
     T("ObjectSubtype", GARAGE_SUBTYPE)   # Тип машиноместа (обязательный) — значение уточнить
-    T("Secured", "Да")                   # Охрана: тег Secured, булево Да/Нет (не «Есть»)
-    T("Square", area)
+    T("Secured", "Да")                   # Охрана: тег Secured, булево Да/Нет ✓
+    # Square НЕ шлём: у паркинга это НЕОБЯЗАТЕЛЬНЫЙ строгий список (10–30 / «> 30»),
+    # наши 13.3/26.6 в него не попали → «значение не найдено». Площадь есть в описании.
     im = ET.SubElement(ad, "Images")
     for u in imgs[:40]:
         ET.SubElement(im, "Image", {"url": u})

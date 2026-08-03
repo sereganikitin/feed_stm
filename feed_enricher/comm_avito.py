@@ -59,6 +59,7 @@ DEFAULTS = {
     "PowerSockets":   "Есть",
     "Heating":        "Центральное",  # Авито НЕ принимает «Есть» для Heating (только цент./автон./нет)
     "ParkingType":    "В здании",     # обязательный параметр Авито (Парковка)
+    "Entrance":       "С улицы",       # Вход (для аренды обязателен)
     "BuildingType":   "Жилой дом",   # для отдельных зданий — «Другой» (см. _add_ad)
     "ContactMethod":  "По телефону и в сообщениях",
 }
@@ -75,6 +76,7 @@ CHOICES = {
     "PowerSockets":   ["Есть", "Нет"],
     "Heating":        ["Центральное", "Автономное", "Нет"],
     "ParkingType":    ["На улице", "В здании", "Нет"],
+    "Entrance":       ["С улицы", "Со двора"],
     "PropertyRights": ["Собственник", "Посредник"],
     "ContactMethod":  ["По телефону и в сообщениях", "По телефону", "В сообщениях"],
 }
@@ -89,6 +91,7 @@ LABELS = {
     "PowerSockets":   "Электрические розетки",
     "Heating":        "Отопление",
     "ParkingType":    "Парковка",
+    "Entrance":       "Вход (аренда)",
     "PropertyRights": "Права на объект",
     "ContactMethod":  "Способ связи",
 }
@@ -182,8 +185,8 @@ def _add_garage_ad(root, ext, area, price, imgs, desc, addr, op, phone, cfg) -> 
         T("Price", price)
     T("PropertyRights", cfg["PropertyRights"])
     T("ObjectType", "Машиноместо")
-    T("ObjectSubtype", GARAGE_SUBTYPE)   # Тип машиноместа (обязательный)
-    T("Secured", cfg["Security"])        # Охрана — тег Secured (не Security!)
+    T("ObjectSubtype", GARAGE_SUBTYPE)   # Тип машиноместа (обязательный) — значение уточнить
+    T("Secured", "Да")                   # Охрана: тег Secured, булево Да/Нет (не «Есть»)
     T("Square", area)
     im = ET.SubElement(ad, "Images")
     for u in imgs[:40]:
@@ -227,7 +230,8 @@ def _add_ad(root, o, cfg) -> bool:
         T("Price", int(round(float(price))))
     except ValueError:
         T("Price", price)
-    T("PriceType", "за всё")
+    if op == "Продам":
+        T("PriceType", "за всё")   # у аренды (Сдам) своя размерность цены — не шлём «за всё»
     T("Square", area)
     floor = (o.findtext("FloorNumber") or "").strip()
     if floor:
@@ -248,6 +252,8 @@ def _add_ad(root, o, cfg) -> bool:
     T("PowerSockets",   cfg["PowerSockets"])
     T("Heating",        cfg["Heating"])
     T("ParkingType",    cfg["ParkingType"])
+    if op == "Сдам":
+        T("Entrance", cfg["Entrance"])   # Вход — обязателен для аренды
     T("BuildingType", "Другой" if base == "building" else cfg["BuildingType"])
     # Контакты
     T("ContactPhone", _phone(o))

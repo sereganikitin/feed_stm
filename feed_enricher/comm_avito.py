@@ -62,6 +62,7 @@ DEFAULTS = {
     "Entrance":       "С улицы",       # Вход (для аренды обязателен)
     "RentalType":     "Прямая",         # Тип аренды (аренда, обязателен)
     "RentPriceType":  "в месяц",         # Размерность цены аренды (цена за всё помещение в месяц)
+    "OfficeType":     "Офис",            # «Что сдаёте» у офиса — предположение, уточнить
     "BuildingType":   "Жилой дом",   # для отдельных зданий — «Другой» (см. _add_ad)
     "ContactMethod":  "По телефону и в сообщениях",
 }
@@ -81,6 +82,7 @@ CHOICES = {
     "Entrance":       ["С улицы", "Со двора"],
     "RentalType":     ["Прямая", "Субаренда"],
     "RentPriceType":  ["в месяц", "в месяц за м2", "в год", "в год за м2", "в месяц за рабочее место"],
+    "OfficeType":     ["Офис", "Часть офиса", "Рабочее место"],
     "PropertyRights": ["Собственник", "Посредник"],
     "ContactMethod":  ["По телефону и в сообщениях", "По телефону", "В сообщениях"],
 }
@@ -98,6 +100,7 @@ LABELS = {
     "Entrance":       "Вход (аренда)",
     "RentalType":     "Тип аренды",
     "RentPriceType":  "Размерность цены (аренда)",
+    "OfficeType":     "Что сдаёте (офис)",
     "PropertyRights": "Права на объект",
     "ContactMethod":  "Способ связи",
 }
@@ -149,6 +152,20 @@ def _images(o) -> list:
         if u and u not in urls:
             urls.append(u)
     return urls
+
+
+def _avito_floor(floor: str) -> str:
+    """Этаж в допустимые значения Авито: −1/0 → «Цокольный», ≤−2 → «Подвальный»,
+    ≥1 → номер. (Список Avito: Подвальный/Цокольный/1/2/…)"""
+    try:
+        n = int(float(floor))
+    except (TypeError, ValueError):
+        return floor
+    if n <= -2:
+        return "Подвальный"
+    if n in (-1, 0):
+        return "Цокольный"
+    return str(n)
 
 
 def _phone(o) -> str:
@@ -241,7 +258,7 @@ def _add_ad(root, o, cfg) -> bool:
     T("Square", area)
     floor = (o.findtext("FloorNumber") or "").strip()
     if floor:
-        T("Floor", floor)
+        T("Floor", _avito_floor(floor))
     # Готовность — из Building/Deadline/IsComplete (Зорге сдан, Б37 строится)
     complete = (o.findtext("Building/Deadline/IsComplete") or "").strip().lower() == "true"
     T("ReadinessStatus", "В эксплуатации" if complete else "Строится")
@@ -258,9 +275,13 @@ def _add_ad(root, o, cfg) -> bool:
     T("PowerSockets",   cfg["PowerSockets"])
     T("Heating",        cfg["Heating"])
     T("ParkingType",    cfg["ParkingType"])
+    # Вход — обязателен у помещений (кроме отдельных зданий, где проходит без него)
+    if base != "building":
+        T("Entrance", cfg["Entrance"])
     if op == "Сдам":
-        T("Entrance", cfg["Entrance"])       # Вход — обязателен для аренды
         T("RentalType", cfg["RentalType"])   # Тип аренды — обязателен для аренды
+    if obj == "Офисное помещение":
+        T("OfficeType", cfg["OfficeType"])   # «Что сдаёте» — обязателен у офиса
     T("BuildingType", "Другой" if base == "building" else cfg["BuildingType"])
     # Контакты
     T("ContactPhone", _phone(o))

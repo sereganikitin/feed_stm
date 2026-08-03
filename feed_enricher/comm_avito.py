@@ -57,7 +57,8 @@ DEFAULTS = {
     "CarAccess":      "Есть",
     "Lighting":       "Есть",
     "PowerSockets":   "Есть",
-    "Heating":        "Есть",
+    "Heating":        "Центральное",  # Авито НЕ принимает «Есть» для Heating (только цент./автон./нет)
+    "ParkingType":    "В здании",     # обязательный параметр Авито (Парковка)
     "BuildingType":   "Жилой дом",   # для отдельных зданий — «Другой» (см. _add_ad)
     "ContactMethod":  "По телефону и в сообщениях",
 }
@@ -72,7 +73,8 @@ CHOICES = {
     "CarAccess":      ["Есть", "Нет"],
     "Lighting":       ["Есть", "Нет"],
     "PowerSockets":   ["Есть", "Нет"],
-    "Heating":        ["Есть", "Нет", "Центральное", "Автономное"],
+    "Heating":        ["Центральное", "Автономное", "Нет"],
+    "ParkingType":    ["На улице", "В здании", "Нет"],
     "PropertyRights": ["Собственник", "Посредник"],
     "ContactMethod":  ["По телефону и в сообщениях", "По телефону", "В сообщениях"],
 }
@@ -86,6 +88,7 @@ LABELS = {
     "Lighting":       "Освещение",
     "PowerSockets":   "Электрические розетки",
     "Heating":        "Отопление",
+    "ParkingType":    "Парковка",
     "PropertyRights": "Права на объект",
     "ContactMethod":  "Способ связи",
 }
@@ -239,6 +242,7 @@ def _add_ad(root, o, cfg) -> bool:
     T("Lighting",       cfg["Lighting"])
     T("PowerSockets",   cfg["PowerSockets"])
     T("Heating",        cfg["Heating"])
+    T("ParkingType",    cfg["ParkingType"])
     T("BuildingType", "Другой" if base == "building" else cfg["BuildingType"])
     # Контакты
     T("ContactPhone", _phone(o))

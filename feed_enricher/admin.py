@@ -372,6 +372,16 @@ def _commercial_cards() -> list:
                   "refresh": f"{PUBLIC_BASE_URL}/refresh-comm-avito",
                   "settings": url_for("admin.comm_avito_settings"),
                   "preview": None})
+    # 4) Зорге-коммерция для КЛАССИФАЙДОВ (свои тексты описаний + порядок лотов)
+    from . import comm_zorge_classified as czcls
+    cards.append({"name": "Зорге коммерция — для классифайдов",
+                  "sub": "свои описания (Google Doc) + порядок лотов (PDF) · 9 аренда + 6 продажа",
+                  "tiles": [{"plat": "ЦИАН", "cnt": _count(czcls.OUT_CIAN, "object"),
+                             "color": "#2563eb", "url": f"{PUBLIC_BASE_URL}/feed/comm/zorge-cls-cian.xml"},
+                            {"plat": "Авито", "cnt": _count(czcls.OUT_AVITO, "Ad"),
+                             "color": "#16a34a", "url": f"{PUBLIC_BASE_URL}/feed/comm/zorge-cls-avito.xml"}],
+                  "refresh": f"{PUBLIC_BASE_URL}/refresh-comm-zorge-cls",
+                  "preview": None})
     return cards
 
 

@@ -385,6 +385,11 @@ def _refresh_loop():
             print(f"[auto-refresh-comm-avito] {comm_avito.refresh()}")
         except Exception as e:
             print(f"[auto-refresh-comm-avito] error: {e}")
+        try:
+            from . import comm_zorge_classified
+            print(f"[auto-refresh-comm-zorge-cls] {comm_zorge_classified.build()}")
+        except Exception as e:
+            print(f"[auto-refresh-comm-zorge-cls] error: {e}")
         time.sleep(REFRESH_INTERVAL_HOURS * 3600)
 
 
@@ -730,13 +735,53 @@ def serve_comm_zorge_img_v(ver: str, name: str):
 
 @app.route("/refresh-comm-zorge", methods=["POST"])
 def manual_refresh_comm_zorge():
-    from . import comm_zorge_cian, comm_avito
+    from . import comm_zorge_cian, comm_avito, comm_zorge_classified
     r = comm_zorge_cian.refresh()
     try:
         comm_avito.refresh()
     except Exception as e:
         print(f"[comm-avito] rebuild failed: {e}")
+    try:
+        comm_zorge_classified.build()   # классифайд-фиды (свои тексты+порядок)
+    except Exception as e:
+        print(f"[comm-zorge-cls] build failed: {e}")
     return jsonify(r)
+
+
+@app.route("/feed/comm/zorge-cls-cian.xml")
+def serve_comm_zorge_cls_cian():
+    """Зорге коммерция — ЦИАН для классифайдов (свои описания + порядок лотов)."""
+    from . import comm_zorge_classified
+    p = comm_zorge_classified.OUT_CIAN
+    if not p.exists():
+        try:
+            comm_zorge_classified.build()
+        except Exception:
+            pass
+    if not p.exists():
+        abort(503)
+    return send_file(p, mimetype="application/xml")
+
+
+@app.route("/feed/comm/zorge-cls-avito.xml")
+def serve_comm_zorge_cls_avito():
+    """Зорге коммерция — Авито для классифайдов (свои описания + порядок лотов)."""
+    from . import comm_zorge_classified
+    p = comm_zorge_classified.OUT_AVITO
+    if not p.exists():
+        try:
+            comm_zorge_classified.build()
+        except Exception:
+            pass
+    if not p.exists():
+        abort(503)
+    return send_file(p, mimetype="application/xml")
+
+
+@app.route("/refresh-comm-zorge-cls", methods=["POST"])
+def manual_refresh_comm_zorge_cls():
+    from . import comm_zorge_classified
+    return jsonify(comm_zorge_classified.build())
 
 
 @app.route("/feed/comm/avito.xml")

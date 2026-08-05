@@ -23,10 +23,16 @@ OUT_DIR   = CACHE_DIR / "comm_zorge_cls"
 OUT_CIAN  = OUT_DIR / "cian.xml"
 OUT_AVITO = OUT_DIR / "avito.xml"
 
-_TEXTS = json.loads((Path(__file__).parent / "comm_zorge_cls_texts.json").read_text("utf-8"))
+_TEXTS_PATH = Path(__file__).parent / "comm_zorge_cls_texts.json"
+
+
+def _load_texts() -> dict:
+    """Тексты читаем при каждой сборке (обновление json не требует рестарта)."""
+    return json.loads(_TEXTS_PATH.read_text("utf-8"))
+
 
 # Порядок лотов: аренда (PDF 1-9), затем продажа (Фитнес, ГАБ371, Йога 4/3/2 эт, ГАБ894).
-# Йога 3 и 2 эт (11242974/11242968) используют один общий текст продажи №4.
+# Каждый Йога-этаж — свой текст продажи (в Google Doc 6 блоков продажи).
 ORDER = ["11901465", "9849983", "13443309R", "11770818", "15077881",
          "9841263", "9849991", "11760880", "9849988",
          "13443309", "16890194", "11242998", "11242974", "11242968", "16890195"]
@@ -62,6 +68,7 @@ def _set_desc(o, text: str) -> None:
 
 
 def build() -> dict:
+    texts = _load_texts()
     src = ET.parse(comm_zorge_cian.OUT).getroot()
     objs = {o.findtext("ExternalId"): o for o in src.findall("object")}
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -72,10 +79,10 @@ def build() -> dict:
     n_cian = 0
     for eid in ORDER:
         o = objs.get(eid)
-        if o is None or eid not in _TEXTS:
+        if o is None or eid not in texts:
             continue
         oc = copy.deepcopy(o)
-        _set_desc(oc, _fit(_clean(_TEXTS[eid]), CIAN_MAX))
+        _set_desc(oc, _fit(_clean(texts[eid]), CIAN_MAX))
         root.append(oc)
         n_cian += 1
     ET.indent(root)
@@ -86,10 +93,10 @@ def build() -> dict:
     aroot = ET.Element("Ads", {"formatVersion": "3", "target": "Avito.ru"})
     for eid in ORDER:
         o = objs.get(eid)
-        if o is None or eid not in _TEXTS:
+        if o is None or eid not in texts:
             continue
         oc = copy.deepcopy(o)
-        _set_desc(oc, _fit(_clean(_TEXTS[eid]), AVITO_MAX))
+        _set_desc(oc, _fit(_clean(texts[eid]), AVITO_MAX))
         comm_avito._add_ad(aroot, oc, cfg)
     ET.indent(aroot)
     ET.ElementTree(aroot).write(OUT_AVITO, encoding="utf-8", xml_declaration=True)

@@ -13,19 +13,52 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from .config import PUBLIC_BASE_URL, file_ver
+from PIL import Image, ImageDraw, ImageFont
+
+from .config import PUBLIC_BASE_URL, file_ver, CACHE_DIR
 
 PARKING_FEED_URL = "https://pb7828.profitbase.ru/export/profitbase_xml/4afc254cede6521b4f96eb1aa9029368?scheme=https"
 ADDRESS = "Москва, ул. Зорге, дом 9"
 PHONE   = "+74952924193"
 
-# Картинка для ВСЕХ машиномест — единое фото parking.jpg (правило клиента, авг 2026).
-# Раздаётся роутом /parking-img/<ver>/parking.jpg (версия = mtime, cache-busting).
-IMG_PATH = Path(__file__).parent / "assets" / "parking.jpg"
+# Картинка машиноместа = фото parking.jpg + 2 белые плашки: номер (ММ N) и площадь.
+# Динамический текст на плашках делает КАЖДОЕ фото уникальным (Авито не считает дублями).
+# Координаты плашек — из SVG-макета клиента (Паркинг_плашки[_длинный].svg → 1200×900).
+IMG_PATH  = Path(__file__).parent / "assets" / "parking.jpg"
+_FONT     = Path(__file__).parent / "assets" / "fonts" / "TT-Fors-Trial-Medium.ttf"
+RENDER_DIR = CACHE_DIR / "parking_img"
+_WHITE = (254, 254, 254)
+_BLACK = (43, 42, 41)
+# np — плашка номера, ap — плашка площади; xxc — центр текста (anchor mm); f — кегль
+_LAY_SHORT = {"np": (909, 731, 1146, 791), "npc": (1028, 760),
+              "ap": (909, 804, 1146, 864), "apc": (1028, 834), "f": 46}   # одиночное
+_LAY_LONG  = {"np": (861, 731, 1177, 791), "npc": (1019, 760),
+              "ap": (941, 804, 1177, 864), "apc": (1059, 834), "f": 41}   # семейное (201+201А)
 
 
-def img_url() -> str:
-    return f"{PUBLIC_BASE_URL}/parking-img/{file_ver(IMG_PATH)}/parking.jpg"
+def _ensure_img(ext: str, num_txt: str, area_txt: str, family: bool) -> Path:
+    """Отрисовать фото машиноместа с плашками (кэш; перерис. если фото-исходник новее)."""
+    RENDER_DIR.mkdir(parents=True, exist_ok=True)
+    out = RENDER_DIR / f"{ext}.png"
+    if out.exists() and out.stat().st_mtime >= IMG_PATH.stat().st_mtime:
+        return out
+    lay = _LAY_LONG if family else _LAY_SHORT
+    im = Image.open(IMG_PATH).convert("RGB")
+    d = ImageDraw.Draw(im)
+    for rect in (lay["np"], lay["ap"]):
+        d.rounded_rectangle(rect, radius=12, fill=_WHITE, outline=_BLACK, width=2)
+    font = ImageFont.truetype(str(_FONT), lay["f"])
+    d.text(lay["npc"], num_txt,  fill=_BLACK, font=font, anchor="mm")
+    d.text(lay["apc"], area_txt, fill=_BLACK, font=font, anchor="mm")
+    im.save(out, "PNG", optimize=True)
+    return out
+
+
+def img_url(lot: dict) -> str:
+    num = ("+".join(lot["numbers"])).upper()            # 192 / 201+201А
+    area = f"{lot['area']:.1f}".rstrip("0").rstrip(".").replace(".", ",")
+    out = _ensure_img(lot["ext"], f"ММ {num}", f"{area} м²", lot["family"])
+    return f"{PUBLIC_BASE_URL}/parking-img/{lot['ext']}/{file_ver(out)}.png"
 
 # Гаражная категория ЦИАН (по офиц. доке cian.ru/xml_import/doc):
 #   <Garage><Type> = box/garage/parkingPlace; <Status> = byProxy/cooperative/ownership.
@@ -143,8 +176,8 @@ def append_cian(root) -> int:
         _T(bt, "Price", lot["price"])
         _T(bt, "Currency", "rur")
         _T(bt, "ContractType", "sale")
-        # Картинка — единое фото parking.jpg (правило: для всех машиномест)
-        img = img_url()
+        # Картинка — фото parking.jpg с плашками номера/площади (уникальна на лот)
+        img = img_url(lot)
         lp = ET.SubElement(o, "LayoutPhoto")
         _T(lp, "FullUrl", img); _T(lp, "IsDefault", "1")
         photos = ET.SubElement(o, "Photos")

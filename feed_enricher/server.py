@@ -733,14 +733,16 @@ def serve_comm_zorge_img_v(ver: str, name: str):
     return serve_comm_zorge_img(name)
 
 
-@app.route("/parking-img/<ver>/parking.jpg")
-@app.route("/parking-img/parking.jpg")
-def serve_parking_img(ver=None):
-    """Единая картинка машиномест (parking.jpg из assets)."""
+@app.route("/parking-img/<ext>/<ver>.png")
+def serve_parking_img(ext, ver):
+    """Картинка машиноместа (parking.jpg + плашки номера/площади), по ExternalId."""
     from . import comm_parking
-    if not comm_parking.IMG_PATH.exists():
+    if "/" in ext or "\\" in ext:
         abort(404)
-    return send_file(comm_parking.IMG_PATH, mimetype="image/jpeg")
+    p = comm_parking.RENDER_DIR / f"{ext}.png"
+    if not p.exists():
+        abort(404)
+    return send_file(p, mimetype="image/png")
 
 
 @app.route("/refresh-comm-zorge", methods=["POST"])

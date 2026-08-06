@@ -11,10 +11,21 @@ XML). Берём КОНКРЕТНЫЕ места из LOTS (задача кли�
 """
 import urllib.request
 import xml.etree.ElementTree as ET
+from pathlib import Path
+
+from .config import PUBLIC_BASE_URL, file_ver
 
 PARKING_FEED_URL = "https://pb7828.profitbase.ru/export/profitbase_xml/4afc254cede6521b4f96eb1aa9029368?scheme=https"
 ADDRESS = "Москва, ул. Зорге, дом 9"
 PHONE   = "+74952924193"
+
+# Картинка для ВСЕХ машиномест — единое фото parking.jpg (правило клиента, авг 2026).
+# Раздаётся роутом /parking-img/<ver>/parking.jpg (версия = mtime, cache-busting).
+IMG_PATH = Path(__file__).parent / "assets" / "parking.jpg"
+
+
+def img_url() -> str:
+    return f"{PUBLIC_BASE_URL}/parking-img/{file_ver(IMG_PATH)}/parking.jpg"
 
 # Гаражная категория ЦИАН (по офиц. доке cian.ru/xml_import/doc):
 #   <Garage><Type> = box/garage/parkingPlace; <Status> = byProxy/cooperative/ownership.
@@ -132,13 +143,13 @@ def append_cian(root) -> int:
         _T(bt, "Price", lot["price"])
         _T(bt, "Currency", "rur")
         _T(bt, "ContractType", "sale")
-        # План места (из ProfitBase)
-        if lot["plan"]:
-            lp = ET.SubElement(o, "LayoutPhoto")
-            _T(lp, "FullUrl", lot["plan"]); _T(lp, "IsDefault", "1")
-            photos = ET.SubElement(o, "Photos")
-            ps = ET.SubElement(photos, "PhotoSchema")
-            _T(ps, "FullUrl", lot["plan"]); _T(ps, "IsDefault", "1")
+        # Картинка — единое фото parking.jpg (правило: для всех машиномест)
+        img = img_url()
+        lp = ET.SubElement(o, "LayoutPhoto")
+        _T(lp, "FullUrl", img); _T(lp, "IsDefault", "1")
+        photos = ET.SubElement(o, "Photos")
+        ps = ET.SubElement(photos, "PhotoSchema")
+        _T(ps, "FullUrl", img); _T(ps, "IsDefault", "1")
         n += 1
     return n
 

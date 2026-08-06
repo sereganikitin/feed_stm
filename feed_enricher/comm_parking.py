@@ -20,6 +20,9 @@ from .config import PUBLIC_BASE_URL, file_ver, CACHE_DIR
 PARKING_FEED_URL = "https://pb7828.profitbase.ru/export/profitbase_xml/4afc254cede6521b4f96eb1aa9029368?scheme=https"
 ADDRESS = "Москва, ул. Зорге, дом 9"
 PHONE   = "+74952924193"
+# Координаты паркинга (корпус 6). Точной точки здания паркинга нет — пока точка ЖК
+# (9Ак1); заменить на реальную координату корпуса 6, когда пришлют.
+COORD = ("55.78310", "37.50950")
 
 # Картинка машиноместа = фото parking.jpg + 2 белые плашки: номер (ММ N) и площадь.
 # Динамический текст на плашках делает КАЖДОЕ фото уникальным (Авито не считает дублями).
@@ -161,6 +164,8 @@ def append_cian(root) -> int:
         _T(o, "ExternalId", lot["ext"])
         _T(o, "Description", _desc(lot))
         _T(o, "Address", ADDRESS)
+        co = ET.SubElement(o, "Coordinates")
+        _T(co, "Lat", COORD[0]); _T(co, "Lng", COORD[1])
         ph = ET.SubElement(o, "Phones"); psc = ET.SubElement(ph, "PhoneSchema")
         _T(psc, "CountryCode", "+7"); _T(psc, "Number", PHONE.lstrip("+7"))
         area = f"{lot['area']:.1f}".rstrip("0").rstrip(".")

@@ -180,6 +180,10 @@ def refresh():
         lots += 1
         eid = (obj.findtext("ExternalId") or "").strip()
         _set(obj, "Category", CAT_BY_LOT.get(eid, "freeAppointmentObject") + "Rent")
+        # Координаты (CIAN <Coordinates>) — Берзарина 37
+        if obj.find("Coordinates") is None:
+            co = ET.SubElement(obj, "Coordinates")
+            _set(co, "Lat", "55.79085"); _set(co, "Lng", "37.46131")
         # Описание: чистим запрещённые символы (& и т.п.); срок сдачи — АВТОРИТЕТНО из
         # конфига (зафиксирован): убираем любую существующую строку «Срок сдачи…»
         # (в т.ч. просочившуюся из ProfitBase) и ставим актуальную.

@@ -36,6 +36,15 @@ ADDR_BY_LOT = {
     "11242974": "Москва, ул. Зорге, дом 9Ас8",   # Йога 3 эт
     "11242998": "Москва, ул. Зорге, дом 9Ас8",   # Йога 4 эт
 }
+# Координаты по строениям (CIAN <Coordinates> — точнее геокодирования адреса).
+ZK_COORD = ("55.78310", "37.50950")   # 9Ак1 главный корпус — по умолчанию
+COORD_BY_LOT = {
+    "16890194": ("55.78333",  "37.50972"),   # 9Ас5 Велопрокат
+    "16890195": ("55.783023", "37.509864"),  # 9Ас4 Офис продаж
+    "11242968": ("55.783144", "37.508957"),  # 9Ас8 Йога
+    "11242974": ("55.783144", "37.508957"),
+    "11242998": ("55.783144", "37.508957"),
+}
 # НДС: без явного VatType ЦИАН показывает «НДС включён». notIncluded — то значение,
 # что на Б37 отображалось верно (приходило из ProfitBase). usn ЦИАН показывает как «УСН».
 VAT_TYPE = "notIncluded"
@@ -233,6 +242,9 @@ def refresh():
             desc = _clean_desc(_build_desc(it, naz, addr))
         _T(o, "Description", desc)
         _T(o, "Address", addr)
+        lat, lng = COORD_BY_LOT.get(ext_id, ZK_COORD)   # координаты строения
+        co = ET.SubElement(o, "Coordinates")
+        _T(co, "Lat", lat); _T(co, "Lng", lng)
         ph = ET.SubElement(o, "Phones"); psc = ET.SubElement(ph, "PhoneSchema")
         _T(psc, "CountryCode", "+7"); _T(psc, "Number", PHONE.lstrip("+7"))
         _T(o, "TotalArea", _num(area))

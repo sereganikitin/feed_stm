@@ -17,7 +17,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from .config import CACHE_DIR
-from . import comm_zorge_cian, comm_avito
+from . import comm_zorge_cian, comm_avito, comm_parking
 
 OUT_DIR   = CACHE_DIR / "comm_zorge_cls"
 OUT_CIAN  = OUT_DIR / "cian.xml"
@@ -85,6 +85,7 @@ def build() -> dict:
         _set_desc(oc, _fit(_clean(texts[eid]), CIAN_MAX))
         root.append(oc)
         n_cian += 1
+    n_park = comm_parking.append_cian(root)   # машиноместа — в конец после лотов
     ET.indent(root)
     ET.ElementTree(root).write(OUT_CIAN, encoding="utf-8", xml_declaration=True)
 
@@ -98,7 +99,12 @@ def build() -> dict:
         oc = copy.deepcopy(o)
         _set_desc(oc, _fit(_clean(texts[eid]), AVITO_MAX))
         comm_avito._add_ad(aroot, oc, cfg)
+    # машиноместа — в конец Авито (через их garageSale-объекты)
+    park = ET.Element("feed")
+    comm_parking.append_cian(park)
+    for po in park.findall("object"):
+        comm_avito._add_ad(aroot, po, cfg)
     ET.indent(aroot)
     ET.ElementTree(aroot).write(OUT_AVITO, encoding="utf-8", xml_declaration=True)
 
-    return {"cian": n_cian, "avito": len(aroot.findall("Ad"))}
+    return {"cian": n_cian, "parking": n_park, "avito": len(aroot.findall("Ad"))}

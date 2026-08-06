@@ -17,7 +17,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from .config import CACHE_DIR
-from . import comm_zorge_cian, comm_avito, comm_parking
+from . import comm_zorge_cian, comm_avito, comm_parking, comm_cian_rent
 
 OUT_DIR   = CACHE_DIR / "comm_zorge_cls"
 OUT_CIAN  = OUT_DIR / "cian.xml"
@@ -85,7 +85,12 @@ def build() -> dict:
         _set_desc(oc, _fit(_clean(texts[eid]), CIAN_MAX))
         root.append(oc)
         n_cian += 1
-    n_park = comm_parking.append_cian(root)   # машиноместа — в конец после лотов
+    n_park = comm_parking.append_cian(root)   # машиноместа — после лотов
+    # Коммерция Б37 — в самый конец (из готового comm_cian_rent, свои описания/фото)
+    b37 = ET.parse(comm_cian_rent.OUT).getroot().findall("object") \
+        if comm_cian_rent.OUT.exists() else []
+    for o in b37:
+        root.append(copy.deepcopy(o))
     ET.indent(root)
     ET.ElementTree(root).write(OUT_CIAN, encoding="utf-8", xml_declaration=True)
 
@@ -104,7 +109,10 @@ def build() -> dict:
     comm_parking.append_cian(park)
     for po in park.findall("object"):
         comm_avito._add_ad(aroot, po, cfg)
+    # Коммерция Б37 — в самый конец Авито
+    for o in b37:
+        comm_avito._add_ad(aroot, copy.deepcopy(o), cfg)
     ET.indent(aroot)
     ET.ElementTree(aroot).write(OUT_AVITO, encoding="utf-8", xml_declaration=True)
 
-    return {"cian": n_cian, "parking": n_park, "avito": len(aroot.findall("Ad"))}
+    return {"cian": n_cian, "parking": n_park, "b37": len(b37), "avito": len(aroot.findall("Ad"))}

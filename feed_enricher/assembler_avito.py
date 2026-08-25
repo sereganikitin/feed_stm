@@ -242,24 +242,23 @@ def enrich_pb_avito_feed(slug: str, avito_xml: bytes, out_path: Path,
             for img in list(imgs):
                 if any(m in (img.get("url") or "") for m in replace_markers):
                     imgs.remove(img)
-            for u in extra_urls:
-                ET.SubElement(imgs, "Image", {"url": u})
 
-        # Обложка — наша брендированная планировка (если сгенерирована для лота).
-        if iid and (enriched_dir / f"{iid}.png").exists():
+        # Порядок галереи: обложка → виды из окон лота → доп.фото с Я.Диска.
+        view_urls = lot_view_urls(slug, iid)
+        if iid and ((enriched_dir / f"{iid}.png").exists() or view_urls or extra_urls):
             if imgs is None:
                 imgs = ET.SubElement(ad, "Images")
             for img in list(imgs):
                 if any(m in (img.get("url") or "") for m in _PLAN_URL_MARKERS):
                     imgs.remove(img)
-            imgs.insert(0, ET.Element("Image", {"url": _enriched_url(slug, iid)}))
-
-        # Виды из окон лота (если есть) — в конец
-        view_urls = lot_view_urls(slug, iid)
-        if view_urls:
-            if imgs is None:
-                imgs = ET.SubElement(ad, "Images")
+            insert_at = 0
+            if (enriched_dir / f"{iid}.png").exists():
+                imgs.insert(0, ET.Element("Image", {"url": _enriched_url(slug, iid)}))
+                insert_at = 1
             for u in view_urls:
+                imgs.insert(insert_at, ET.Element("Image", {"url": u}))
+                insert_at += 1
+            for u in extra_urls:
                 ET.SubElement(imgs, "Image", {"url": u})
 
         # Авито: не более 40 изображений

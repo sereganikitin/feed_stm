@@ -43,7 +43,7 @@ def assemble_feed(slug: str, original_xml: bytes,
     by_id = {l.internal_id: l for l in lots}
 
     # Если у проекта задан общий набор фото для ЦИАН — карточку собираем заново:
-    # обложка (наша планировка) → фото из папки ЯД → виды из окон. Фото ProfitBase
+    # обложка (наша планировка) → виды из окон → фото из папки ЯД. Фото ProfitBase
     # в фид не идут. Иначе — старое поведение (подмена обложки + чистка поэтажек).
     cian_photos = cian_extra_urls(slug) if get_project(slug).get("cian_extra_photos") else None
 
@@ -79,9 +79,9 @@ def assemble_feed(slug: str, original_xml: bytes,
                 for ch in list(photos):
                     photos.remove(ch)
             _set_photo(photos, new_url, True)            # обложка — наша планировка
-            for u in cian_photos:                        # общий набор с Я.Диска
-                _set_photo(photos, u, False)
             for u in view_urls:                          # виды из окон лота
+                _set_photo(photos, u, False)
+            for u in cian_photos:                        # общий набор с Я.Диска
                 _set_photo(photos, u, False)
         else:
             # ── Старое поведение: подмена обложки + чистка поэтажек + виды ──

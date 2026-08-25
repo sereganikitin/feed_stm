@@ -135,13 +135,13 @@ def _add_project_offers(root, slug: str, lots: list[FeedLot], coords: dict) -> N
         if kitchen:
             _area(o, "kitchen-space", _num(kitchen))
 
-        # Фото: планировка первой → фото ЯД → виды (всего не более 30)
+        # Фото: планировка первой → виды → фото ЯД (всего не более 30)
         MAX_IMG = 30
         plan = [f"{PUBLIC_BASE_URL}/enriched/{slug}/{file_ver(enriched_dir / f'{lot.internal_id}.png')}/{lot.internal_id}.png"] \
             if (enriched_dir / f"{lot.internal_id}.png").exists() else []
         views = lot_view_urls(slug, lot.internal_id)
         budget = max(0, MAX_IMG - len(plan) - len(views))
-        for u in plan + photo_urls[:budget] + views:
+        for u in plan + views + photo_urls[:budget]:
             _e(o, "image", u)
 
         if lot.description:

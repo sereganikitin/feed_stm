@@ -390,6 +390,11 @@ def _refresh_loop():
             print(f"[auto-refresh-comm-zorge-cls] {comm_zorge_classified.build()}")
         except Exception as e:
             print(f"[auto-refresh-comm-zorge-cls] error: {e}")
+        try:
+            from . import zorge_soho_avito
+            print(f"[auto-refresh-soho] {zorge_soho_avito.refresh()}")
+        except Exception as e:
+            print(f"[auto-refresh-soho] error: {e}")
         time.sleep(REFRESH_INTERVAL_HOURS * 3600)
 
 
@@ -794,6 +799,49 @@ def serve_comm_zorge_cls_avito():
 def manual_refresh_comm_zorge_cls():
     from . import comm_zorge_classified
     return jsonify(comm_zorge_classified.build())
+
+
+@app.route("/feed/zorge9-soho-avito.xml")
+def serve_soho_avito():
+    """Avito-фид апартаментов Зорге (корпус 3 Soho, вторичка)."""
+    from . import zorge_soho_avito
+    p = zorge_soho_avito.OUT
+    if not p.exists():
+        try:
+            zorge_soho_avito.refresh()
+        except Exception:
+            pass
+    if not p.exists():
+        abort(503)
+    return send_file(p, mimetype="application/xml")
+
+
+@app.route("/refresh-soho", methods=["POST"])
+def manual_refresh_soho():
+    from . import zorge_soho_avito
+    return jsonify(zorge_soho_avito.refresh())
+
+
+@app.route("/soho-img/common/<ver>/<name>")
+def serve_soho_common(ver, name):
+    from . import zorge_soho_avito
+    if "/" in name or "\\" in name:
+        abort(404)
+    p = zorge_soho_avito.PHOTO_DIR / "common" / name
+    if not p.exists():
+        abort(404)
+    return send_file(p, mimetype="image/jpeg")
+
+
+@app.route("/soho-img/int/<folder>/<ver>/<name>")
+def serve_soho_interior(folder, ver, name):
+    from . import zorge_soho_avito
+    if any(c in (folder + name) for c in ("/", "\\")):
+        abort(404)
+    p = zorge_soho_avito.PHOTO_DIR / "int" / folder / name
+    if not p.exists():
+        abort(404)
+    return send_file(p, mimetype="image/jpeg")
 
 
 @app.route("/feed/comm/avito.xml")

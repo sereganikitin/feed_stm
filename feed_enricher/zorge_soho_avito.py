@@ -8,6 +8,7 @@
 
 Роут /feed/zorge9-soho-avito.xml ; триггер POST /refresh-soho.
 """
+import hashlib
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -67,6 +68,14 @@ DESCRIPTION = (
 
 def _folder(usl: str) -> str:
     return usl.replace("/", ".")
+
+
+def _kitchen_stub(ext: str) -> int:
+    """Площадь кухни не заполнена в ProfitBase. KitchenSpace обязателен только при
+    Rooms=1 и выше (студиям неприменим), пока данных нет — ставим стабильное
+    (не скачущее между обновлениями фида) случайное целое 5..8 м² на лот."""
+    h = int(hashlib.md5(ext.encode()).hexdigest(), 16)
+    return 5 + h % 4
 
 
 def _sync_photos() -> None:
@@ -164,6 +173,8 @@ def refresh() -> dict:
         T("Price", price)
         T("Square", area)
         T("Rooms", "Студия" if studio else "1")
+        if not studio:
+            T("KitchenSpace", _kitchen_stub(ext))
         T("Floor", floor)
         T("Floors", floors)
         T("Status", "Апартаменты")

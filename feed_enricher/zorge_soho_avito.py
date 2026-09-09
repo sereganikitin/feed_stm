@@ -168,7 +168,8 @@ def refresh() -> dict:
         T("Floors", floors)
         T("Status", "Апартаменты")
         T("HouseType", "Монолитный")
-        T("Decoration", "Без отделки")
+        T("Renovation", "Требуется")
+        T("DealType", "Прямая продажа")
         if ceil:
             T("CeilingHeight", ceil)
         if built:

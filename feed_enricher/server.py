@@ -117,6 +117,61 @@ def _euro_layout_ids(url: str) -> set:
     return ids
 
 
+_euro_discount_cache: dict = {}   # url -> (monotonic_ts, {internal_id: discount_price})
+
+
+def _euro_discount_prices(url: str) -> dict:
+    """internal-id → цена со скидкой из активной акции (<special-offer><discount-price>)
+    в Яндекс-выгрузке ProfitBase. Источник честный (сверено с карточкой в ProfitBase)."""
+    now = time.monotonic()
+    hit = _euro_discount_cache.get(url)
+    if hit and now - hit[0] < _EURO_TTL:
+        return hit[1]
+    root = ET.fromstring(download_feed(url))
+    ln = lambda t: t.split("}")[-1]
+    prices: dict = {}
+    for o in root.iter():
+        if ln(o.tag) != "offer":
+            continue
+        iid = o.get("internal-id")
+        if not iid:
+            continue
+        for c in o.iter():   # special-offer вложен глубже (offer → special-offers → special-offer)
+            if ln(c.tag) == "special-offer":
+                for x in c:
+                    if ln(x.tag) == "discount-price" and (x.text or "").strip():
+                        try:
+                            prices[iid] = float(x.text.strip())
+                        except ValueError:
+                            pass
+    _euro_discount_cache[url] = (now, prices)
+    return prices
+
+
+def _apply_euro_discount(slug: str, lots: list):
+    """ProfitBase иногда не учитывает активную акцию в ЦИАН/Авито-экспорте (баг подтверждён
+    на Б37: акция 15% не долетает, хотя 20% — долетает). Берём честную уже посчитанную
+    цену со скидкой из Яндекс-выгрузки ProfitBase и подставляем — надёжнее, чем полагаться
+    на то, что экспорт-модуль ProfitBase сам её применит. Правит lot.price → применяется
+    во всех фидах (ЦИАН/Яндекс), где используется lots."""
+    url = (PROJECTS.get(slug) or {}).get("euro_source_url")
+    if not url:
+        return
+    try:
+        prices = _euro_discount_prices(url)
+    except Exception as e:
+        print(f"[{slug}] euro-source недоступен, скидку не трогаем: {e}")
+        return
+    n = 0
+    for lot in lots:
+        dp = prices.get(lot.internal_id)
+        if dp and lot.price and round(dp) != lot.price:
+            lot.price = round(dp)
+            n += 1
+    if n:
+        print(f"[{slug}] скидка из источника применена к {n} лотам")
+
+
 def _apply_euro_rooms(slug: str, lots: list):
     """Европланировки: ProfitBase считает кухню-гостиную комнатой (euro=N), а классифайды
     ждут по спальням (N−1) — иначе площадка отклоняет («трёшка вместо евро 2+1»). Флаг
@@ -164,6 +219,7 @@ def _gen_combined_yandex_realty():
             continue
         lots = parse_feed(cian.read_bytes())
         _apply_euro_rooms(slug, lots)
+        _apply_euro_discount(slug, lots)
         av = d["feeds"] / "original_avito.xml"
         coords = coords_from_avito(av.read_bytes()) if av.exists() else {}
         items.append((slug, lots, coords))
@@ -209,6 +265,7 @@ def resync_views(slug: str):
         raw = cian.read_bytes()
         lots = parse_feed(raw)
         _apply_euro_rooms(slug, lots)
+        _apply_euro_discount(slug, lots)
         _sync_views(slug, d, lots)
         _sync_cian_photos(slug, d)
         assemble_feed(slug, raw, lots, d["feeds"] / "feed.xml")
@@ -268,6 +325,7 @@ def refresh_project(slug: str) -> dict:
         original = download_feed(proj["pb_feed_url"], dirs["feeds"] / "original.xml")
         lots = parse_feed(original)
         _apply_euro_rooms(slug, lots)
+        _apply_euro_discount(slug, lots)
         ok, fail = 0, 0
         for lot in lots:
             if not (lot.plan_url and lot.price and lot.area_total):

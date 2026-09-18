@@ -186,6 +186,11 @@ def _rebuild_all_feeds(slug: str) -> None:
     assemble_feed(slug, raw, parse_feed(raw), d["feeds"] / "feed.xml")
     _rebuild_avito(slug)
     _rebuild_yandex(slug)
+    try:
+        from . import site_feed
+        site_feed.refresh(reuse_original=True)
+    except Exception as e:
+        print(f"[{slug}] site-feed rebuild failed: {e}")
 
 
 def _regenerate_plans(slug: str) -> int:

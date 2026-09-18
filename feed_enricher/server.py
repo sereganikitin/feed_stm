@@ -453,6 +453,11 @@ def _refresh_loop():
             print(f"[auto-refresh-soho] {zorge_soho_avito.refresh()}")
         except Exception as e:
             print(f"[auto-refresh-soho] error: {e}")
+        try:
+            from . import site_feed
+            print(f"[auto-refresh-site-feed] {site_feed.refresh()}")
+        except Exception as e:
+            print(f"[auto-refresh-site-feed] error: {e}")
         time.sleep(REFRESH_INTERVAL_HOURS * 3600)
 
 
@@ -468,6 +473,11 @@ def _views_loop():
                     print(f"[views-hourly] {slug} ok")
                 except Exception as e:
                     print(f"[views-hourly] {slug} error: {e}")
+        try:
+            from . import site_feed
+            site_feed.refresh(reuse_original=True)
+        except Exception as e:
+            print(f"[views-hourly] site-feed error: {e}")
 
 
 @app.route("/")
@@ -878,6 +888,27 @@ def serve_soho_avito():
 def manual_refresh_soho():
     from . import zorge_soho_avito
     return jsonify(zorge_soho_avito.refresh())
+
+
+@app.route("/feed/profitbase-site.xml")
+def serve_site_feed():
+    """profitbase_xml для корпоративного сайта + наши фото (интерьер/визуализация/виды/общие)."""
+    from . import site_feed
+    p = site_feed.OUT
+    if not p.exists():
+        try:
+            site_feed.refresh()
+        except Exception:
+            pass
+    if not p.exists():
+        abort(503)
+    return send_file(p, mimetype="application/xml")
+
+
+@app.route("/refresh-site-feed", methods=["POST"])
+def manual_refresh_site_feed():
+    from . import site_feed
+    return jsonify(site_feed.refresh())
 
 
 @app.route("/soho-img/common/<ver>/<name>")

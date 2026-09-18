@@ -64,6 +64,28 @@ def _list_items(public_key: str, path: str = None) -> list[dict]:
     return _api_get("", params).get("_embedded", {}).get("items", [])
 
 
+# Подпапки лота на ЯД → префикс локального файла. «вид» и картинки прямо в папке лота —
+# виды из окон (без префикса, NN.jpg); остальные подпапки (напр. «необработанные») не берём.
+_LOT_SUBDIRS = {"вид": "", "визуализация": "vis_", "интерьер": "int_"}
+
+
+def _lot_images(public_key: str, folder_path: str) -> dict:
+    """{префикс: [файлы-картинки, по имени]} для папки лота: картинки прямо в ней
+    и в подпапках вид / визуализация / интерьер."""
+    is_img = lambda f: f.get("type") == "file" and (f.get("mime_type") or "").startswith("image/")
+    items = _list_items(public_key, folder_path)
+    groups = {"": [f for f in items if is_img(f)], "vis_": [], "int_": []}
+    for d in items:
+        if d.get("type") != "dir":
+            continue
+        pref = _LOT_SUBDIRS.get(d["name"].strip().lower())
+        if pref is not None:
+            groups[pref] += [f for f in _list_items(public_key, d["path"]) if is_img(f)]
+    for files in groups.values():
+        files.sort(key=lambda f: f["name"])
+    return groups
+
+
 def sync_view_folders(public_key: str, dest_base: Path, resolve,
                       max_side: int = 2560, quality: int = 86) -> dict:
     """Обход публичной папки видов. Для каждой папки вызывает resolve(name, ancestors)
@@ -83,10 +105,11 @@ def sync_view_folders(public_key: str, dest_base: Path, resolve,
                 # ЗЕРКАЛИРОВАНИЕ: если набор файлов в ЯД изменился (добавили/удалили) —
                 # пере-скачиваем папку лота (чистим старые числовые 01.jpg…). Ручные
                 # загрузки (u*.jpg) не трогаем. Манифест _src.json хранит имена из ЯД.
-                srcs = sorted((f for f in _list_items(public_key, it["path"])
-                               if f.get("type") == "file" and (f.get("mime_type") or "").startswith("image/")),
-                              key=lambda f: f["name"])
-                yd_names = [f["name"] for f in srcs]
+                groups = _lot_images(public_key, it["path"])
+                # Манифест: имена видов как раньше (старый формат для лотов без подпапок
+                # не меняется → лишней перекачки нет) + «пref+имя» для интерьера/визуализации.
+                yd_names = [f["name"] for f in groups[""]] + \
+                           [f"{p}{f['name']}" for p in ("vis_", "int_") for f in groups[p]]
                 manifest = dest / "_src.json"
                 try:
                     old = json.loads(manifest.read_text("utf-8"))
@@ -94,16 +117,17 @@ def sync_view_folders(public_key: str, dest_base: Path, resolve,
                     old = None
                 if old != yd_names:
                     for p in dest.glob("*.jpg"):
-                        if p.stem.isdigit():
+                        if p.stem.isdigit() or p.stem.startswith(("int_", "vis_")):
                             p.unlink()
-                    for i, f in enumerate(srcs, 1):
-                        out = dest / f"{i:02d}.jpg"
-                        href = _api_get("/download", {"public_key": public_key, "path": f["path"]})["href"]
-                        req = urllib.request.Request(href, headers={"User-Agent": "feed-enricher"})
-                        with _open(req, timeout=180) as r:
-                            raw = r.read()
-                        save_resized_jpeg(raw, out, max_side=max_side, quality=quality)
-                        time.sleep(0.4)
+                    for pref, files in groups.items():
+                        for i, f in enumerate(files, 1):
+                            out = dest / f"{pref}{i:02d}.jpg"
+                            href = _api_get("/download", {"public_key": public_key, "path": f["path"]})["href"]
+                            req = urllib.request.Request(href, headers={"User-Agent": "feed-enricher"})
+                            with _open(req, timeout=180) as r:
+                                raw = r.read()
+                            save_resized_jpeg(raw, out, max_side=max_side, quality=quality)
+                            time.sleep(0.4)
                     manifest.write_text(json.dumps(yd_names, ensure_ascii=False), "utf-8")
                 names = sorted(p.name for p in dest.glob("*.jpg"))
                 if names:

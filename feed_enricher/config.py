@@ -393,13 +393,25 @@ def file_ver(path) -> str:
         return "0"
 
 
-def lot_view_urls(slug: str, internal_id: str) -> list:
-    """URL видов из окон лота (cache/<slug>/views/<id>/*.jpg) с версией в пути."""
+def lot_view_groups(slug: str, internal_id: str) -> dict:
+    """Фото лота с ЯД по типам: {interior, visualization, view} → [URL с версией в пути].
+    Файлы cache/<slug>/views/<id>/: int_NN — интерьер, vis_NN — визуализация,
+    остальные (NN.jpg с ЯД и u*.jpg ручные) — виды из окон."""
+    groups = {"interior": [], "visualization": [], "view": []}
     vdir = CACHE_DIR / slug / "views" / internal_id
     if not vdir.exists():
-        return []
-    return [f"{PUBLIC_BASE_URL}/views/{slug}/{internal_id}/{file_ver(f)}/{f.name}"
-            for f in sorted(vdir.glob("*.jpg"))]
+        return groups
+    for f in sorted(vdir.glob("*.jpg")):
+        key = ("interior" if f.name.startswith("int_")
+               else "visualization" if f.name.startswith("vis_") else "view")
+        groups[key].append(f"{PUBLIC_BASE_URL}/views/{slug}/{internal_id}/{file_ver(f)}/{f.name}")
+    return groups
+
+
+def lot_view_urls(slug: str, internal_id: str) -> list:
+    """Все фото лота с ЯД для галереи в порядке: интерьер → визуализация → вид из окна."""
+    g = lot_view_groups(slug, internal_id)
+    return g["interior"] + g["visualization"] + g["view"]
 
 
 def excluded_photos(slug: str, kind: str) -> set:

@@ -60,6 +60,13 @@ def assemble_feed(slug: str, original_xml: bytes,
         if fr is not None:
             fr.text = str(_ROOMS_TO_CIAN.get(lot.rooms, lot.rooms))
 
+        # 0b) Цена — если _apply_euro_discount поправил lot.price (ProfitBase не учёл
+        # акцию в самом ЦИАН-экспорте), проставляем честную цену со скидкой.
+        if lot.price:
+            price_el = obj.find("BargainTerms/Price")
+            if price_el is not None:
+                price_el.text = str(lot.price)
+
         # 1) LayoutPhoto/FullUrl — основной план
         lp = obj.find("LayoutPhoto")
         if lp is not None:

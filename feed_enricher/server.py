@@ -51,7 +51,7 @@ def _sync_views(slug, dirs, lots):
             flat_key2id[(m.group(1), m.group(2), m.group(3), m.group(4) or "0")] = l.internal_id
 
     def res_id(name, anc):
-        m = re.search(r"id[:\s]*([0-9]{4,})", name)
+        m = re.search(r"id[:\s]*([0-9]{4,})", name, re.IGNORECASE)
         return m.group(1) if (m and m.group(1) in wanted) else None
 
     def make_res_fn(korpus):

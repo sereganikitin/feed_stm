@@ -8,6 +8,8 @@ feed_enricher/cache/
 __pycache__/
 *.pyc
 *.pyo
+# content-plan — отдельный несвязанный проект, ведётся отдельно
+content-plan/
 # прочее
 .DS_Store
 Thumbs.db

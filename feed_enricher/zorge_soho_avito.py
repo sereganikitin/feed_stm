@@ -136,6 +136,7 @@ def refresh() -> dict:
         studio = _val(f.get("studio")) == "1"
         ceil = ""
         raw_plan = ""
+        discount_price = ""
         for c in off.iter():
             t = loc(c.tag)
             if t == "image" and c.get("type") == "plan" and not raw_plan:
@@ -147,6 +148,17 @@ def refresh() -> dict:
                     if loc(x.tag) == "value": vl = (x.text or "").strip()
                 if nm == "Высота потолка" and vl:
                     ceil = vl.replace(".", ",")
+            # ProfitBase иногда не учитывает акцию в plain <price> — честная цена
+            # со скидкой лежит в <special-offer><discount-price> (см. _apply_euro_discount).
+            if t == "special-offer":
+                for x in c:
+                    if loc(x.tag) == "discount-price" and (x.text or "").strip():
+                        discount_price = (x.text or "").strip()
+        if discount_price:
+            try:
+                price = str(round(float(discount_price)))
+            except ValueError:
+                pass
         imgs = _images(usl, raw_plan)
         if not (price and area and imgs):
             continue

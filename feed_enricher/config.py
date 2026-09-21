@@ -393,6 +393,33 @@ def file_ver(path) -> str:
         return "0"
 
 
+PHOTO_DUP_MAX_DIST = 8     # aHash 16×16 (256 бит): расстояние ≤ 8 — тот же кадр; похожие ракурсы (≥ ~15) остаются
+_PHOTO_HASHES: dict = {}   # (путь, mtime_ns, размер) → aHash
+
+
+def _photo_hash(path):
+    """aHash 16×16 фото (кэш в памяти по файлу+mtime). None, если файл не читается."""
+    try:
+        st = path.stat()
+        key = (str(path), st.st_mtime_ns, st.st_size)
+        if key in _PHOTO_HASHES:
+            return _PHOTO_HASHES[key]
+        from PIL import Image
+        with Image.open(path) as im:
+            im.draft("L", (64, 64))      # быстрое декодирование JPEG в уменьшенном виде
+            px = im.convert("L").resize((16, 16)).tobytes()
+        m = sum(px) / len(px)
+        h = int("".join("1" if p > m else "0" for p in px), 2)
+        _PHOTO_HASHES[key] = h
+        return h
+    except Exception:
+        return None
+
+
+def _hash_dist(a: int, b: int) -> int:
+    return bin(a ^ b).count("1")
+
+
 def lot_view_groups(slug: str, internal_id: str) -> dict:
     """Фото лота с ЯД по типам: {interior, visualization, view} → [URL с версией в пути].
     Файлы cache/<slug>/views/<id>/: int_NN — интерьер, vis_NN — визуализация,
@@ -401,10 +428,22 @@ def lot_view_groups(slug: str, internal_id: str) -> dict:
     vdir = CACHE_DIR / slug / "views" / internal_id
     if not vdir.exists():
         return groups
+    files = {"interior": [], "visualization": [], "view": []}
     for f in sorted(vdir.glob("*.jpg")):
         key = ("interior" if f.name.startswith("int_")
                else "visualization" if f.name.startswith("vis_") else "view")
-        groups[key].append(f"{PUBLIC_BASE_URL}/views/{slug}/{internal_id}/{file_ver(f)}/{f.name}")
+        files[key].append(f)
+    # Защита от дублей: один и тот же кадр (напр. загружен вручную и пришёл с ЯД) отдаём один раз.
+    # Порядок приоритета — интерьер → визуализация → вид; в виде NN.jpg с ЯД идёт раньше u*.jpg.
+    seen: list = []
+    for key in ("interior", "visualization", "view"):
+        for f in files[key]:
+            h = _photo_hash(f)
+            if h is not None:
+                if any(_hash_dist(h, s) <= PHOTO_DUP_MAX_DIST for s in seen):
+                    continue
+                seen.append(h)
+            groups[key].append(f"{PUBLIC_BASE_URL}/views/{slug}/{internal_id}/{file_ver(f)}/{f.name}")
     return groups
 
 

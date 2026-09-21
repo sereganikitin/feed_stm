@@ -1,79 +1,30 @@
-"""Админ-панель для коллег: управление фото и настройками 4 фидов.
+"""Информационная админ-панель /admin: вкладки по проектам и сайтам.
 
-Доступ — один общий пароль (env ADMIN_PASSWORD), сессия в cookie.
-Всё под тем же nginx/TLS, отдельный префикс /admin.
+Вкладки: Зорге 9 · Зорге 9 коммерция · Серебряный бор · Серебряный бор коммерция · Сайты.
+В каждой — ссылки на фиды для площадок, превью галереи карточки «как на площадке» и справка,
+откуда берутся фото. Ничего не редактируется (кроме кнопки «Обновить фиды» — пересборка).
 
-Возможности:
-  • Дашборд: статус ЦИАН/Авито фидов обоих проектов, последний refresh.
-  • Фото карточки Авито по каждому фиду: загрузка файлов, удаление, порядок,
-    кнопка синхронизации с Яндекс.Диска. Фото у каждого фида свои (per-feed).
-  • Настройки: отделка по умолчанию, материал дома, тип рынка, замена building_image,
-    приписка к описанию, формула рассрочки (где есть).
-  • Ручной refresh фида, превью первой карточки, проверка обязательных полей Авито.
-
-Редактируемые настройки складываются в overrides.json (volume) и перекрывают код.
+Доступ — общий пароль (env ADMIN_PASSWORD), сессия в cookie.
 """
 import hmac
 import os
-import time
-import xml.etree.ElementTree as ET
+import threading
 from functools import wraps
-from pathlib import Path
 
-from flask import (Blueprint, abort, flash, jsonify, redirect, render_template_string,
+from flask import (Blueprint, abort, flash, redirect, render_template_string,
                    request, session, url_for)
-from werkzeug.utils import secure_filename
 
-from .config import (PROJECTS, PUBLIC_BASE_URL, ADMIN_DIR, CACHE_DIR, project_dirs,
-                     get_project, set_override, load_overrides,
-                     excluded_photos, add_excluded_photo, PHOTOS_YD_ONLY)
-
-_YD_ONLY_MSG = "Управление фото отключено: фото берутся только с Яндекс.Диска (добавляйте и удаляйте файлы там)."
-
-# Общий Я.Поиск фид (Зорге + Б37 одним файлом) — путь синхронен server.COMBINED_YR_PATH
-_COMBINED_YR = CACHE_DIR / "combined" / "yandex_realty.xml"
-from .yadisk import save_resized_jpeg, sync_public_folder
-from .assembler_avito import enrich_pb_avito_feed
-from .assembler_yandex import assemble_yandex_feed, coords_from_avito, _korpus_no
-from .assembler_yandex_realty import assemble_yandex_realty_feed
-from .assembler import assemble_feed
-from .enricher import enrich_lot
-from .parser import parse_feed
-from . import commercial as comm
-
-# Наборы фото карточки: Авито, Яндекс, ЦИАН — общий код, разные каталоги/настройки/фид.
-# mirror=True (ЦИАН) — синк зеркалит ЯД (удаления подхватываются).
-_KINDS = {
-    "avito":  {"dir": "extra",        "order_key": "extra_photo_order",
-               "cfg_key": "avito_extra_photos",  "url": "extra",        "title": "Авито", "mirror": False,
-               "color": "#16a34a", "where": "Показываются в объявлении на Авито"},
-    "yandex": {"dir": "extra_yandex", "order_key": "extra_photo_order_yandex",
-               "cfg_key": "yandex_extra_photos", "url": "extra_yandex", "title": "Яндекс.Недвижимость", "mirror": False,
-               "color": "#fc3f1d", "where": "Идут в Яндекс.Недвижимость, Яндекс Поиск и ДомКлик"},
-    "cian":   {"dir": "extra_cian",   "order_key": "extra_photo_order_cian",
-               "cfg_key": "cian_extra_photos",   "url": "extra_cian",   "title": "ЦИАН", "mirror": True,
-               "color": "#2563eb", "where": "Показываются в карточке на ЦИАН"},
-}
+from .config import PUBLIC_BASE_URL, PROJECTS
+from . import admin_data as ad
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
-
 _ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
-
-# Обязательные поля Авито для проверки карточки (категория Квартиры)
-_REQUIRED = ["Id", "Category", "OperationType", "Price", "Rooms", "Square",
-             "Floor", "Floors", "Decoration", "Images"]
-
-# Подсказки значений
-_DECOR = ["Без отделки", "Черновая", "Чистовая", "Предчистовая (White box)"]
-_HOUSE = ["Монолитный", "Монолитно-кирпичный", "Кирпичный", "Панельный", "Блочный"]
 
 
 # ──────────────── авторизация ────────────────
 
 def _check_password(pw: str) -> bool:
-    if not _ADMIN_PASSWORD:
-        return False
-    return hmac.compare_digest(pw, _ADMIN_PASSWORD)
+    return bool(_ADMIN_PASSWORD) and hmac.compare_digest(pw, _ADMIN_PASSWORD)
 
 
 def login_required(f):
@@ -102,1121 +53,329 @@ def logout():
     return redirect(url_for("admin.login"))
 
 
-# ──────────────── вспомогательное ────────────────
-
-def _status() -> dict:
-    try:
-        import json
-        return json.loads((ADMIN_DIR / "status.json").read_text("utf-8"))
-    except Exception:
-        return {}
-
-
-def _count(path: Path, tag: str) -> int:
-    # сравниваем по локальному имени тега — Яндекс-фид в namespace (offer => {...}offer)
-    try:
-        return sum(1 for e in ET.parse(path).getroot().iter()
-                   if e.tag.split("}")[-1] == tag)
-    except Exception:
-        return 0
-
-
-def _rebuild_avito(slug: str) -> None:
-    """Быстро пересобрать Авито-фид после правок фото — без перекачки из ProfitBase.
-
-    Берём сохранённый original_avito.xml и заново прогоняем подмену картинок.
-    Если исходника нет (или вариант B) — полноценный refresh.
-    """
-    d = project_dirs(slug)
-    src = d["feeds"] / "original_avito.xml"
-    if PROJECTS[slug].get("pb_avito_feed_url") and src.exists():
-        enrich_pb_avito_feed(slug, src.read_bytes(), d["feeds"] / "avito.xml")
-    else:
-        from .server import refresh_project
-        refresh_project(slug)
-
-
-def _rebuild_yandex(slug: str) -> None:
-    """Пересобрать Яндекс-фид после правок фото — из кэшированных исходников."""
-    d = project_dirs(slug)
-    cian = d["feeds"] / "original.xml"
-    if not cian.exists():
-        from .server import refresh_project
-        refresh_project(slug)
-        return
-    lots = parse_feed(cian.read_bytes())
-    av = d["feeds"] / "original_avito.xml"
-    coords = coords_from_avito(av.read_bytes()) if av.exists() else {}
-    now = time.strftime("%Y-%m-%dT%H:%M:%S+03:00")
-    assemble_yandex_feed(slug, lots, coords, d["feeds"] / "yandex.xml", now)
-    assemble_yandex_realty_feed(slug, lots, coords, d["feeds"] / "yandex_realty.xml", now)
-    try:
-        from .server import _gen_combined_yandex_realty
-        _gen_combined_yandex_realty()   # общий фид держим в актуальном состоянии
-    except Exception as e:
-        print(f"[{slug}] combined yandex-realty rebuild failed: {e}")
-
-
-def _rebuild_cian(slug: str) -> None:
-    """Пересобрать ЦИАН-фид после правок фото — из кэшированного исходника."""
-    d = project_dirs(slug)
-    cian = d["feeds"] / "original.xml"
-    if not cian.exists():
-        from .server import refresh_project
-        refresh_project(slug)
-        return
-    raw = cian.read_bytes()
-    assemble_feed(slug, raw, parse_feed(raw), d["feeds"] / "feed.xml")
-
-
-def _rebuild(slug: str, kind: str) -> None:
-    if kind == "yandex":
-        _rebuild_yandex(slug)
-    elif kind == "cian":
-        _rebuild_cian(slug)
-    else:
-        _rebuild_avito(slug)
-
-
-def _rebuild_all_feeds(slug: str) -> None:
-    """Пересобрать ЦИАН/Авито/Яндекс из кэша (после ручной правки видов)."""
-    d = project_dirs(slug)
-    cian = d["feeds"] / "original.xml"
-    if not cian.exists():
-        return
-    raw = cian.read_bytes()
-    assemble_feed(slug, raw, parse_feed(raw), d["feeds"] / "feed.xml")
-    _rebuild_avito(slug)
-    _rebuild_yandex(slug)
-    try:
-        from . import site_feed
-        site_feed.refresh(reuse_original=True)
-    except Exception as e:
-        print(f"[{slug}] site-feed rebuild failed: {e}")
-
-
-def _regenerate_plans(slug: str) -> int:
-    """Перерисовать все обогащённые планировки (после смены рассрочки/шаблона).
-    Из кэша: берём сохранённый CIAN-фид, чистим PNG, рисуем заново, пересобираем 3 фида.
-    Без перекачки фидов/фото — быстро и без риска 429. Возвращает число перерисованных."""
-    d = project_dirs(slug)
-    cian = d["feeds"] / "original.xml"
-    if not cian.exists():
-        from .server import refresh_project
-        refresh_project(slug)
-        return len(list(d["enriched"].glob("*.png")))
-    raw = cian.read_bytes()
-    lots = parse_feed(raw)
-    for png in d["enriched"].glob("*.png"):
-        png.unlink()
-    ok = 0
-    for lot in lots:
-        if lot.plan_url and lot.price and lot.area_total:
-            try:
-                enrich_lot(slug, lot)
-                ok += 1
-            except Exception as e:
-                print(f"[{slug}] regen error {lot.internal_id}: {e}")
-    assemble_feed(slug, raw, lots, d["feeds"] / "feed.xml")
-    _rebuild_avito(slug)
-    _rebuild_yandex(slug)
-    return ok
-
-
-def _photos(slug: str, kind: str = "avito") -> list[str]:
-    """Имена фото набора в порядке из настроек (новые — в конец)."""
-    k = _KINDS[kind]
-    files = {p.name for p in project_dirs(slug)[k["dir"]].glob("*.jpg")} - excluded_photos(slug, kind)
-    order = [n for n in (get_project(slug).get(k["order_key"]) or []) if n in files]
-    return order + sorted(files - set(order))
-
-
-def _views_count(slug: str) -> int:
-    """Сколько лотов имеют виды (подпапок в cache/<slug>/views)."""
-    vdir = project_dirs(slug)["views"]
-    return sum(1 for p in vdir.glob("*") if p.is_dir() and any(p.glob("*.jpg"))) if vdir.exists() else 0
-
-
-def _feed_health(slug: str) -> dict:
-    """Страховка «новые лоты не сломают фиды»: ищем лоты в новых корпусах, у которых
-    нет привязки к Яндексу (yandex_house_ids). В новом формате Я.Поиск house-id
-    ОБЯЗАТЕЛЕН → без него площадка отклонит оффер. Малошумно: репортим только
-    реально «ломающее» (лоты не на продаже, у которых нет цены/площади, пропускаем)."""
-    out = {"ok": True, "missing": []}
-    proj = get_project(slug)
-    if not proj.get("yandex_building_id"):
-        return out  # проект без привязки к Яндексу — проверять нечего
-    cian = project_dirs(slug)["feeds"] / "original.xml"
-    if not cian.exists():
-        return out
-    house_ids = proj.get("yandex_house_ids", {}) or {}
-    miss: dict = {}
-    for l in parse_feed(cian.read_bytes()):
-        if not (l.price and l.area_total):
-            continue  # не выставлен на продажу — в фиды и так не попадает
-        if not house_ids.get(_korpus_no(l.house_name)):
-            key = l.house_name or "(корпус не указан)"
-            miss[key] = miss.get(key, 0) + 1
-    out["missing"] = [{"house": h, "lots": c} for h, c in sorted(miss.items())]
-    out["ok"] = not out["missing"]
-    return out
-
-
-def _views_coverage(slug: str) -> list:
-    """По каждому лоту: id, метка, число видов (0 = нет). Сортировка: сначала без видов."""
-    d = project_dirs(slug)
-    cian = d["feeds"] / "original.xml"
-    if not cian.exists():
-        return []
-    vdir = d["views"]
-    rows = []
-    for l in parse_feed(cian.read_bytes()):
-        vd = vdir / l.internal_id
-        files = sorted(p.name for p in vd.glob("*.jpg")) if vd.exists() else []
-        lbl = "Ст." if l.rooms == 0 else ("СП" if l.rooms < 0 else f"{l.rooms}К")
-        rows.append({"id": l.internal_id, "house": l.house_name, "floor": l.floor,
-                     "label": lbl, "area": f"{l.area_total:.1f}", "n": len(files), "files": files})
-    rows.sort(key=lambda r: (r["n"] > 0, r["house"], r["id"]))   # без видов — наверх
-    return rows
-
-
-def _avito_check(slug: str) -> dict:
-    """Сводка по собранному Авито-фиду: число объявлений и пропуски обяз. полей."""
-    p = project_dirs(slug)["feeds"] / "avito.xml"
-    out = {"ads": 0, "issues": {}, "first": None}
-    try:
-        root = ET.parse(p).getroot()
-    except Exception:
-        return out
-    ads = list(root.iter("Ad"))
-    out["ads"] = len(ads)
-    for ad in ads:
-        for tag in _REQUIRED:
-            el = ad.find(tag)
-            empty = el is None or (tag != "Images" and not (el.text or "").strip()) \
-                    or (tag == "Images" and len(el) == 0)
-            if empty:
-                out["issues"][tag] = out["issues"].get(tag, 0) + 1
-    if ads:
-        a = ads[0]
-        imgs = [im.get("url") for im in (a.find("Images") or [])]
-        out["plan"] = next((u for u in imgs if "/enriched/" in u), None)
-        out["first"] = {
-            "id": a.findtext("Id"), "rooms": a.findtext("Rooms"),
-            "square": a.findtext("Square"), "price": a.findtext("Price"),
-            "decoration": a.findtext("Decoration"), "images": imgs,
-        }
-    return out
-
-
 # ──────────────── страницы ────────────────
 
 @admin_bp.route("/")
 @login_required
 def dashboard():
-    rows = []
-    st = _status()
-    for slug, p in PROJECTS.items():
-        d = project_dirs(slug)
-        rows.append({
-            "slug": slug, "name": p["name"],
-            "cian": _count(d["feeds"] / "feed.xml", "object"),
-            "avito": _count(d["feeds"] / "avito.xml", "Ad"),
-            "yandex": _count(d["feeds"] / "yandex.xml", "offer"),
-            "yandex_realty": _count(d["feeds"] / "yandex_realty.xml", "offer"),
-            "domclick": _count(d["feeds"] / "domclick.xml", "flat"),
-            "photos": len(_photos(slug, "avito")),
-            "photos_y": len(_photos(slug, "yandex")),
-            "photos_c": len(_photos(slug, "cian")),
-            "views": _views_count(slug),
-            "status": st.get(slug, {}),
-            "health": _feed_health(slug),
-        })
-    return render_template_string(_DASH_HTML, rows=rows, comm_cards=_commercial_cards(),
-                                  combined_yr=_count(_COMBINED_YR, "offer"), base=PUBLIC_BASE_URL)
+    return redirect(url_for("admin.tab_page", tab=ad.tabs()[0]["key"]))
 
 
-# метаданные площадок для карточек коммерции: (подпись, тег для подсчёта, цвет)
-_COMM_PLAT = {"cian": ("ЦИАН", "object", "#2563eb"),
-              "avito": ("Авито", "Ad", "#16a34a"),
-              "yandex": ("Яндекс", "offer", "#fc3f1d")}
-
-
-def _commercial_cards() -> list:
-    """Карточки коммерческих фидов для дашборда: wizard-проекты + кодовые ЦИАН-фиды."""
-    cards = []
-    # 1) Проекты «мастера» (cache/admin/commercial.json)
-    for cslug, cp in comm.load_projects().items():
-        d = comm.comm_dirs(cslug)
-        tiles = []
-        for plat in cp.get("platforms", []):
-            label, tag, color = _COMM_PLAT.get(plat, (plat, "object", "#2563eb"))
-            fp = d["feeds"] / comm._PLATFORM_FILE.get(plat, "feed.xml")
-            tiles.append({"plat": label, "cnt": _count(fp, tag), "color": color,
-                          "url": f"{PUBLIC_BASE_URL}/feed/comm/{cslug}-{plat}.xml"})
-        cards.append({"name": cp.get("name", cslug), "sub": f"код: {cslug}",
-                      "tiles": tiles, "refresh": url_for("admin.commercial_refresh", slug=cslug),
-                      "preview": None})
-    # 2) Отдельные «кодовые» фиды (собираются напрямую через ProfitBase API)
-    from . import comm_zorge_cian, comm_cian_rent
-    for key, name, refr, feed, path in [
-        ("comm-zorge", "Зорге 9 — коммерция", "/refresh-comm-zorge",
-         "/feed/comm/zorge-cian.xml", comm_zorge_cian.OUT),
-        ("comm-b37rent", "Б37 — коммерция (аренда)", "/refresh-comm-rent",
-         "/feed/comm/b37-rent-cian.xml", comm_cian_rent.OUT),
-    ]:
-        cards.append({"name": name, "sub": "сборка через ProfitBase API",
-                      "tiles": [{"plat": "ЦИАН", "cnt": _count(path, "object"),
-                                 "color": "#2563eb", "url": PUBLIC_BASE_URL + feed}],
-                      "refresh": PUBLIC_BASE_URL + refr,
-                      "preview": f"{PUBLIC_BASE_URL}/?feed={key}"})
-    # 3) Общий Avito-фид коммерции (Зорге + Б37, продажа + аренда) — конвертация из CIAN
-    from . import comm_avito
-    cards.append({"name": "Коммерция — Авито (общий)",
-                  "sub": "Зорге + Б37, продажа + аренда · конвертация из CIAN-фидов",
-                  "tiles": [{"plat": "Авито", "cnt": _count(comm_avito.OUT, "Ad"),
-                             "color": "#16a34a", "url": f"{PUBLIC_BASE_URL}/feed/comm/avito.xml"}],
-                  "refresh": f"{PUBLIC_BASE_URL}/refresh-comm-avito",
-                  "settings": url_for("admin.comm_avito_settings"),
-                  "preview": None})
-    # 4) Зорге-коммерция для КЛАССИФАЙДОВ (свои тексты описаний + порядок лотов)
-    from . import comm_zorge_classified as czcls
-    cards.append({"name": "Зорге коммерция — для классифайдов",
-                  "sub": "свои описания (Google Doc) + порядок лотов (PDF) · 9 аренда + 6 продажа",
-                  "tiles": [{"plat": "ЦИАН", "cnt": _count(czcls.OUT_CIAN, "object"),
-                             "color": "#2563eb", "url": f"{PUBLIC_BASE_URL}/feed/comm/zorge-cls-cian.xml"},
-                            {"plat": "Авито", "cnt": _count(czcls.OUT_AVITO, "Ad"),
-                             "color": "#16a34a", "url": f"{PUBLIC_BASE_URL}/feed/comm/zorge-cls-avito.xml"}],
-                  "refresh": f"{PUBLIC_BASE_URL}/refresh-comm-zorge-cls",
-                  "preview": None})
-    return cards
-
-
-@admin_bp.route("/<slug>")
+@admin_bp.route("/<tab>")
 @login_required
-def project(slug: str):
-    if slug not in PROJECTS:
+def tab_page(tab: str):
+    tabs = ad.tabs()
+    cur = next((t for t in tabs if t["key"] == tab), None)
+    if cur is None:
         abort(404)
-    proj = get_project(slug)
-    check = _avito_check(slug)
-    galleries = []
-    for kk, v in _KINDS.items():
-        has_yd = bool((PROJECTS[slug].get(v["cfg_key"]) or {}).get("yadisk_public_key"))
-        if kk == "cian" and not has_yd:
-            continue  # ЦИАН-набор показываем только если задана папка ЯД
-        feed = f"{PUBLIC_BASE_URL}/feed/{slug}.xml" if kk == "cian" \
-            else f"{PUBLIC_BASE_URL}/feed/{slug}-{kk}.xml"
-        galleries.append({
-            "kind": kk, "title": v["title"], "url": v["url"],
-            "photos": _photos(slug, kk), "feed": feed,
-            "has_yd": has_yd, "mirror": v.get("mirror", False),
-            "color": v.get("color", "#2563eb"), "where": v.get("where", ""),
-        })
+    feeds = ad.tab_feeds(tab)
+    infos = {f["key"]: ad.feed_info(f) for f in feeds}
+    sel = next((f for f in feeds if f["key"] == request.args.get("feed")), feeds[0] if feeds else None)
+
+    lots, lot, photos, opts = [], {}, [], []
+    plat = {}
+    if sel:
+        plat = ad.PLATFORMS[sel["platform"]]
+        lots = ad.load_lots(sel)
+        lot = ad.pick_lot(lots, request.args.get("lot", ""))
+        opts = ad.lot_options(lots, sel["platform"])
+        if lot and all(o["id"] != lot["id"] for o in opts):
+            opts = [lot] + opts
+        photos = _gallery(lot, plat)
+
+    st = ad.status().get(cur.get("slug", ""), {}) if cur["kind"] == "project" else {}
+    health = ad.feed_health(cur["slug"]) if cur["kind"] == "project" else {"ok": True, "missing": []}
+    idx = next((i for i, o in enumerate(opts) if lot and o["id"] == lot["id"]), 0)
     return render_template_string(
-        _PROJ_HTML, slug=slug, proj=proj, base=PUBLIC_BASE_URL,
-        galleries=galleries, plan=check.get("plan"), check=check,
-        decor=_DECOR, house=_HOUSE,
-        has_installment=isinstance(PROJECTS[slug].get("installment"), dict),
-        status=_status().get(slug, {}),
-    )
+        _TAB_HTML, tabs=tabs, cur=cur, feeds=feeds, infos=infos, sel=sel, plat=plat,
+        lot=lot, photos=photos, opts=opts, lot_label=ad.lot_label,
+        prev_id=opts[idx - 1]["id"] if opts and idx > 0 else "",
+        next_id=opts[idx + 1]["id"] if opts and idx + 1 < len(opts) else "",
+        sources=ad.photo_sources(cur["key"]), health=health, st=st, kinds=ad.KINDS,
+        base=PUBLIC_BASE_URL, running=cur["key"] in _running)
 
 
-@admin_bp.route("/commercial")
-@login_required
-def commercial_page():
-    projs = comm.load_projects()
-    rows = []
-    for slug, p in projs.items():
-        d = comm.comm_dirs(slug)
+def _gallery(lot: dict, plat: dict) -> list:
+    """Фото лота для превью: подпись, цвет, «не попадёт из-за лимита», дубль ссылки."""
+    if not lot:
+        return []
+    limit = plat.get("limit")
+    urls = [p["u"] for p in lot["photos"]]
+    out = []
+    for i, p in enumerate(lot["photos"]):
+        label, color = ad.KINDS[p["k"]]
+        out.append({"u": p["u"], "k": p["k"], "l": label, "c": color,
+                    "over": bool(limit and i >= limit), "dup": urls.count(p["u"]) > 1})
+    return out
+
+
+# ──────────────── пересборка (единственное действие) ────────────────
+
+_running: dict = {}
+
+
+def _rebuild_job(tab: str):
+    def run():
         try:
-            import xml.etree.ElementTree as _ET
-            n = len(_ET.parse(d["feeds"] / "yandex.xml").getroot()) - 1 if (d["feeds"] / "yandex.xml").exists() else 0
-        except Exception:
-            n = 0
-        rows.append({"slug": slug, "p": p, "n": max(n, 0),
-                     "enriched": len(list(d["enriched"].glob("*.png")))})
-    # Отдельные фиды (собираются кодом, не через мастер)
-    import xml.etree.ElementTree as _ET
-    from . import comm_zorge_cian, comm_cian_rent
-    dedicated = []
-    for key, name, refr, feed, path in [
-        ("comm-zorge", "Зорге 9 — коммерция (ЦИАН)", "/refresh-comm-zorge",
-         "/feed/comm/zorge-cian.xml", comm_zorge_cian.OUT),
-        ("comm-b37rent", "Б37 — коммерция аренда (ЦИАН)", "/refresh-comm-rent",
-         "/feed/comm/b37-rent-cian.xml", comm_cian_rent.OUT),
-    ]:
-        try:
-            n = len(list(_ET.parse(path).getroot().iter("object"))) if path.exists() else 0
-        except Exception:
-            n = 0
-        dedicated.append({"key": key, "name": name, "refresh": refr, "feed": feed, "n": n})
-    return render_template_string(_COMM_HTML, rows=rows, dedicated=dedicated, base=PUBLIC_BASE_URL)
-
-
-@admin_bp.route("/comm-avito")
-@login_required
-def comm_avito_settings():
-    from . import comm_avito
-    return render_template_string(
-        _COMM_AVITO_HTML, base=PUBLIC_BASE_URL,
-        fields=list(comm_avito.CHOICES.keys()),
-        choices=comm_avito.CHOICES, labels=comm_avito.LABELS,
-        current=comm_avito.settings())
-
-
-@admin_bp.route("/comm-avito/save", methods=["POST"])
-@login_required
-def comm_avito_save():
-    from . import comm_avito
-    cur = comm_avito.load_settings()
-    for k, allowed in comm_avito.CHOICES.items():
-        v = request.form.get(k, "").strip()
-        if v in allowed:
-            cur[k] = v
-    comm_avito.save_settings(cur)
-    try:
-        r = comm_avito.refresh()
-        flash(f"Атрибуты сохранены. Avito-фид коммерции пересобран: объявлений {r.get('ads')}.")
-    except Exception as e:
-        flash(f"Сохранено, но пересборка не удалась: {e}")
-    return redirect(url_for("admin.comm_avito_settings"))
-
-
-@admin_bp.route("/commercial/save", methods=["POST"])
-@login_required
-def commercial_save():
-    f = request.form
-    slug = re.sub(r"[^a-z0-9]", "", (f.get("slug", "").strip().lower())) or f"comm{int(time.time())}"
-    plats = [p for p in ("cian", "avito", "yandex") if f.get(p) == "on"]
-    projs = comm.load_projects()
-    projs[slug] = {
-        "name": f.get("name", "").strip() or slug,
-        "source_url": f.get("source_url", "").strip(),
-        "platforms": plats,
-        "address": f.get("address", "").strip(),
-        "sales_agent": {"organization": f.get("org", "").strip(), "category": "застройщик",
-                        "phone": f.get("phone", "").strip(), "url": f.get("url", "").strip()},
-        "yadisk_fallback": f.get("yadisk_fallback", "").strip(),
-    }
-    comm.save_projects(projs)
-    try:
-        r = comm.refresh_commercial(slug)
-        flash(f"Фид «{projs[slug]['name']}» сформирован: лотов {r.get('lots')}, площадки {', '.join(plats) or '—'}.")
-    except Exception as e:
-        flash(f"Сохранено, но при формировании ошибка: {e}")
-    return redirect(url_for("admin.commercial_page"))
-
-
-@admin_bp.route("/commercial/<slug>/refresh", methods=["POST"])
-@login_required
-def commercial_refresh(slug: str):
-    if slug not in comm.load_projects():
-        abort(404)
-    try:
-        r = comm.refresh_commercial(slug)
-        flash(f"Обновлено: лотов {r.get('lots')}, обогащено {r.get('enriched')}.")
-    except Exception as e:
-        flash(f"Ошибка: {e}")
-    return redirect(url_for("admin.commercial_page"))
-
-
-@admin_bp.route("/commercial/<slug>/delete", methods=["POST"])
-@login_required
-def commercial_delete(slug: str):
-    projs = comm.load_projects()
-    if slug in projs:
-        del projs[slug]
-        comm.save_projects(projs)
-        flash(f"Удалён проект {slug}.")
-    return redirect(url_for("admin.commercial_page"))
-
-
-@admin_bp.route("/<slug>/views")
-@login_required
-def views_page(slug: str):
-    if slug not in PROJECTS:
-        abort(404)
-    rows = _views_coverage(slug)
-    have = sum(1 for r in rows if r["n"] > 0)
-    from .server import view_sync_status
-    syncing = request.args.get("started") == "1" or view_sync_status(slug).get("state") == "running"
-    return render_template_string(_VIEWS_HTML, slug=slug, name=PROJECTS[slug]["name"],
-                                  rows=rows, have=have, total=len(rows), base=PUBLIC_BASE_URL,
-                                  syncing=syncing)
-
-
-@admin_bp.route("/<slug>/views/resync", methods=["POST"])
-@login_required
-def views_resync(slug: str):
-    if slug not in PROJECTS:
-        abort(404)
-    # Обход Я.Диска долгий (>120с) → запускаем в фоне, страница опрашивает статус
-    # и показывает попап с итогами по завершении (см. JS в _VIEWS_HTML).
-    from .server import resync_views_async
-    resync_views_async(slug)
-    return redirect(url_for("admin.views_page", slug=slug, started=1))
-
-
-@admin_bp.route("/<slug>/views/sync_status")
-@login_required
-def views_sync_status(slug: str):
-    if slug not in PROJECTS:
-        abort(404)
-    from .server import view_sync_status
-    return jsonify(view_sync_status(slug))
-
-
-@admin_bp.route("/<slug>/views/<lot>/upload", methods=["POST"])
-@login_required
-def views_upload(slug: str, lot: str):
-    if slug not in PROJECTS:
-        abort(404)
-    if PHOTOS_YD_ONLY:
-        flash(_YD_ONLY_MSG)
-        return redirect(url_for("admin.views_page", slug=slug))
-    lot = secure_filename(lot)
-    dest = project_dirs(slug)["views"] / lot
-    dest.mkdir(parents=True, exist_ok=True)
-    n = 0
-    for fs in request.files.getlist("photos"):
-        if fs and fs.filename:
-            try:
-                save_resized_jpeg(fs.read(), dest / f"u{int(time.time()*1000)}{n}.jpg")
-                n += 1
-            except Exception as e:
-                flash(f"{fs.filename}: {e}")
-    _rebuild_all_feeds(slug)
-    flash(f"Лот {lot}: добавлено видов {n}.")
-    return redirect(url_for("admin.views_page", slug=slug))
-
-
-@admin_bp.route("/<slug>/views/<lot>/delete", methods=["POST"])
-@login_required
-def views_delete(slug: str, lot: str):
-    if slug not in PROJECTS:
-        abort(404)
-    if PHOTOS_YD_ONLY:
-        flash(_YD_ONLY_MSG)
-        return redirect(url_for("admin.views_page", slug=slug))
-    lot = secure_filename(lot)
-    name = secure_filename(request.form.get("name", ""))
-    vdir = project_dirs(slug)["views"] / lot
-    p = vdir / name
-    if p.exists():
-        p.unlink()
-        # сброс манифеста — чтобы следующий синк с ЯД пересверился (если в ЯД ещё есть — вернётся)
-        (vdir / "_src.json").unlink(missing_ok=True)
-    _rebuild_all_feeds(slug)
-    flash(f"Удалено: {name}. (Чтобы убрать навсегда — удалите и в папке Я.Диска.)")
-    return redirect(url_for("admin.views_page", slug=slug))
-
-
-@admin_bp.route("/<slug>/settings", methods=["POST"])
-@login_required
-def save_settings(slug: str):
-    if slug not in PROJECTS:
-        abort(404)
-    f = request.form
-    set_override(slug, "avito_default_decoration", f.get("decoration", "").strip())
-    set_override(slug, "avito_house_type", f.get("house_type", "").strip())
-    set_override(slug, "avito_market_type", f.get("market_type", "Новостройка").strip())
-    set_override(slug, "avito_replace_building_image", f.get("replace_bi") == "on")
-    set_override(slug, "description_suffix", f.get("description_suffix", "").strip())
-    try:
-        set_override(slug, "price_discount_pct", float(f.get("discount", "0").replace(",", ".") or 0))
-    except ValueError:
-        flash("Скидка: ожидалось число — не сохранено")
-    # рассрочка (если у проекта она есть) — при изменении сразу перерисовываем планировки
-    inst_changed = False
-    if isinstance(PROJECTS[slug].get("installment"), dict):
-        old = get_project(slug).get("installment")
-        try:
-            new = {
-                "feed_to_base_divisor": float(f.get("inst_div", "0.8").replace(",", ".")),
-                "down_payment_pct": float(f.get("inst_pv", "0.10").replace(",", ".")),
-                "monthly_pct_of_base": float(f.get("inst_m", "0.005").replace(",", ".")),
-            }
-            set_override(slug, "installment", new)
-            inst_changed = (new != old)
-        except ValueError:
-            flash("Рассрочка: ожидались числа — не сохранено")
-    if inst_changed:
-        n = _regenerate_plans(slug)
-        flash(f"Настройки сохранены. Планировки перерисованы с новой рассрочкой ({n} шт).")
-    else:
-        flash("Настройки сохранены. Нажмите «Обновить фид», чтобы применить.")
-    return redirect(url_for("admin.project", slug=slug))
-
-
-@admin_bp.route("/<slug>/<kind>/photos/upload", methods=["POST"])
-@login_required
-def upload_photos(slug: str, kind: str):
-    if slug not in PROJECTS or kind not in _KINDS:
-        abort(404)
-    if PHOTOS_YD_ONLY:
-        flash(_YD_ONLY_MSG)
-        return redirect(url_for("admin.project", slug=slug))
-    k = _KINDS[kind]
-    extra = project_dirs(slug)[k["dir"]]
-    order = list(get_project(slug).get(k["order_key"]) or _photos(slug, kind))
-    added = 0
-    for fs in request.files.getlist("photos"):
-        if not fs or not fs.filename:
-            continue
-        stem = Path(secure_filename(fs.filename)).stem or f"photo{int(time.time())}"
-        name = f"{stem}.jpg"
-        try:
-            save_resized_jpeg(fs.read(), extra / name)
-            if name not in order:
-                order.append(name)
-            added += 1
+            if tab in PROJECTS:
+                from .server import refresh_project
+                refresh_project(tab)
+                from . import site_feed
+                site_feed.refresh(reuse_original=True)
+            elif tab == "zorge9-comm":
+                from . import comm_zorge_cian, comm_avito, comm_zorge_classified
+                comm_zorge_cian.refresh()
+                comm_avito.refresh()
+                comm_zorge_classified.build()
+            elif tab == "b37-comm":
+                from . import comm_cian_rent, comm_avito
+                comm_cian_rent.refresh()
+                comm_avito.refresh()
+            elif tab == "sites":
+                from . import site_feed
+                site_feed.refresh()
         except Exception as e:
-            flash(f"Не удалось обработать {fs.filename}: {e}")
-    set_override(slug, k["order_key"], order)
-    _rebuild(slug, kind)
-    flash(f"Загружено фото ({k['title']}): {added}.")
-    return redirect(url_for("admin.project", slug=slug))
+            print(f"[admin] rebuild {tab} failed: {e}")
+        finally:
+            _running.pop(tab, None)
+    return run
 
 
-@admin_bp.route("/<slug>/<kind>/photos/delete", methods=["POST"])
+@admin_bp.route("/<tab>/refresh", methods=["POST"])
 @login_required
-def delete_photo(slug: str, kind: str):
-    if slug not in PROJECTS or kind not in _KINDS:
+def refresh(tab: str):
+    if all(t["key"] != tab for t in ad.tabs()):
         abort(404)
-    if PHOTOS_YD_ONLY:
-        flash(_YD_ONLY_MSG)
-        return redirect(url_for("admin.project", slug=slug))
-    k = _KINDS[kind]
-    name = secure_filename(request.form.get("name", ""))
-    p = project_dirs(slug)[k["dir"]] / name
-    if p.exists():
-        p.unlink()
-    order = [n for n in (get_project(slug).get(k["order_key"]) or []) if n != name]
-    set_override(slug, k["order_key"], order)
-    add_excluded_photo(slug, kind, name)   # чёрный список — синк с ЯД больше не вернёт
-    _rebuild(slug, kind)
-    flash(f"Удалено: {name}. Из Я.Диска больше не вернётся (в чёрном списке).")
-    return redirect(url_for("admin.project", slug=slug))
-
-
-@admin_bp.route("/<slug>/<kind>/photos/order", methods=["POST"])
-@login_required
-def reorder_photos(slug: str, kind: str):
-    if slug not in PROJECTS or kind not in _KINDS:
-        abort(404)
-    if PHOTOS_YD_ONLY:
-        return (_YD_ONLY_MSG, 409)
-    order = [secure_filename(n) for n in request.form.getlist("order") if n.strip()]
-    set_override(slug, _KINDS[kind]["order_key"], order)
-    _rebuild(slug, kind)
-    return ("", 204)
-
-
-@admin_bp.route("/<slug>/<kind>/photos/sync_yd", methods=["POST"])
-@login_required
-def sync_yd(slug: str, kind: str):
-    if slug not in PROJECTS or kind not in _KINDS:
-        abort(404)
-    k = _KINDS[kind]
-    cfg = PROJECTS[slug].get(k["cfg_key"]) or {}
-    if not cfg.get("yadisk_public_key"):
-        flash("Для этого набора не задана папка Яндекс.Диска")
-        return redirect(url_for("admin.project", slug=slug))
-    try:
-        n = len(sync_public_folder(cfg["yadisk_public_key"], cfg["yadisk_path"],
-                                   project_dirs(slug)[k["dir"]], mirror=k.get("mirror", False),
-                                   exclude=excluded_photos(slug, kind)))
-        _rebuild(slug, kind)
-        flash(f"С Яндекс.Диска синхронизировано ({k['title']}): {n}.")
-    except Exception as e:
-        flash(f"Ошибка синка с Я.Диска: {e}")
-    return redirect(url_for("admin.project", slug=slug))
-
-
-@admin_bp.route("/<slug>/refresh", methods=["POST"])
-@login_required
-def refresh(slug: str):
-    if slug not in PROJECTS:
-        abort(404)
-    from .server import refresh_project  # ленивый импорт — избегаем цикла
-    # принудительная перегенерация планировок (если менялась рассрочка/шаблон)
-    if request.form.get("force") == "on":
-        for png in project_dirs(slug)["enriched"].glob("*.png"):
-            png.unlink()
-    try:
-        res = refresh_project(slug)
-        vdir = project_dirs(slug)["views"]
-        views_n = sum(1 for sub in vdir.iterdir()
-                      if sub.is_dir() and any(sub.glob("*.jpg"))) if vdir.exists() else 0
-        flash(f"Фид обновлён. Лотов: {res.get('lots_total', '?')}, "
-              f"планировок обогащено: {res.get('enriched_ok', 0)}, "
-              f"лотов с видами из окон: {views_n}, "
-              f"объявлений в Авито: {_avito_check(slug)['ads']}.")
-    except Exception as e:
-        flash(f"Ошибка обновления: {e}")
-    return redirect(url_for("admin.project", slug=slug))
+    if tab in _running:
+        flash("Пересборка уже идёт — подождите несколько минут.")
+    else:
+        _running[tab] = True
+        threading.Thread(target=_rebuild_job(tab), daemon=True).start()
+        flash("Пересборка запущена в фоне, обычно занимает несколько минут. Обновите страницу позже.")
+    return redirect(url_for("admin.tab_page", tab=tab))
 
 
 # ──────────────── шаблоны ────────────────
 
 _CSS = """
 <style>
- body{font-family:system-ui,Segoe UI,Roboto,sans-serif;max-width:1480px;margin:0 auto;padding:24px;color:#1c2430;background:#f4f6f9}
- a{color:#2563eb;text-decoration:none} a:hover{text-decoration:underline}
- h1{font-size:26px;margin:0 0 18px} h2{font-size:19px;margin:24px 0 12px}
- .card{background:#fff;border-radius:10px;padding:18px 22px;box-shadow:0 1px 3px rgba(0,0,0,.07);margin-bottom:18px}
- .btn{display:inline-block;background:#2563eb;color:#fff;border:0;border-radius:7px;padding:9px 16px;cursor:pointer;font-size:15px}
- .btn.gray{background:#6b7280}.btn.red{background:#dc2626}.btn.green{background:#16a34a}
- label{display:block;font-size:13px;color:#555;margin:10px 0 4px}
- input[type=text],select,textarea{width:100%;box-sizing:border-box;padding:9px;border:1px solid #cbd5e1;border-radius:6px;font-size:15px}
- table{border-collapse:collapse;width:100%}.td td,td,th{padding:10px;border-bottom:1px solid #eef1f5;text-align:left;font-size:15px}
- .flash{background:#fef9c3;border:1px solid #fde047;border-radius:8px;padding:10px 14px;margin-bottom:14px}
- .pill{display:inline-block;background:#e8f0fe;color:#1a56db;border-radius:20px;padding:2px 10px;font-size:12px}
- .ok{color:#16a34a;font-weight:600}.bad{color:#dc2626;font-weight:600}
- .ph{display:inline-block;margin:5px;vertical-align:top;text-align:center;font-size:12px;color:#666}
- .ph img{width:172px;height:129px;object-fit:cover;border-radius:6px;border:1px solid #ddd;display:block}
- .row{display:flex;gap:18px;flex-wrap:wrap}.col{flex:1;min-width:300px}
- .muted{color:#94a3b8;font-size:13px}
- .strip{display:flex;flex-wrap:wrap;gap:12px;margin-top:12px}
- .modal-bg{position:fixed;inset:0;background:rgba(15,23,42,.5);display:flex;align-items:center;justify-content:center;z-index:50}
- .modal{background:#fff;border-radius:16px;padding:26px 30px;max-width:480px;box-shadow:0 16px 48px rgba(0,0,0,.28);text-align:center}
- .modal-h{font-size:21px;font-weight:700;margin-bottom:12px}
- .modal-b{font-size:16px;color:#334155;line-height:1.55;margin-bottom:20px}
- .tile{position:relative;width:200px;height:150px;border-radius:8px;overflow:hidden;border:1px solid #d7dee7;background:#fff;cursor:grab}
- .tile img{width:100%;height:100%;object-fit:cover;display:block}
- .tile .del{position:absolute;top:4px;right:4px;width:22px;height:22px;border:0;border-radius:50%;background:rgba(220,38,38,.92);color:#fff;font-size:13px;line-height:22px;cursor:pointer;padding:0}
- .tile .num{position:absolute;left:4px;bottom:4px;background:rgba(0,0,0,.6);color:#fff;font-size:11px;border-radius:4px;padding:1px 6px}
- .tile.locked{cursor:default;border-style:dashed;opacity:.95}
- .tile.locked .lbl{position:absolute;left:4px;bottom:4px;background:rgba(37,99,235,.85);color:#fff;font-size:11px;border-radius:4px;padding:1px 6px}
- .tile.add{display:flex;align-items:center;justify-content:center;font-size:34px;color:#94a3b8;cursor:pointer;border-style:dashed}
- .tile.dragover{outline:3px solid #2563eb;outline-offset:-3px}
- .tile.dragging{opacity:.4}
- /* ── дашборд: карточки проектов ── */
- .hero{background:linear-gradient(135deg,#eef4ff,#f7f9fc);border:1px solid #e2e8f5}
- .hero p{margin:0 0 6px;font-size:15px;line-height:1.5}
- .legend{display:flex;gap:22px;flex-wrap:wrap;font-size:14px;color:#475569;margin-top:10px}
- .btn.big{padding:11px 22px;font-size:16px;font-weight:600}
- .pcard{background:#fff;border:1px solid #e6ebf2;border-radius:14px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.06);margin-bottom:20px}
- .pcard-head{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 22px;border-bottom:1px solid #eef1f5}
- .pcard-title{font-size:21px;font-weight:700}
- .pcard-sub{color:#64748b;font-size:13px;margin-top:3px}
- .feeds{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:12px;padding:18px 22px}
- .feed{display:block;border:1px solid #e7ebf1;border-left:5px solid var(--c,#2563eb);border-radius:10px;padding:12px 14px;color:#1c2430}
- .feed{transition:box-shadow .12s ease,transform .12s ease}
- .feed:hover{box-shadow:0 5px 16px rgba(37,99,235,.14);transform:translateY(-2px);text-decoration:none}
- .feed .plat{font-weight:600;font-size:13.5px;min-height:34px}
- .feed .cnt{font-size:28px;font-weight:800;line-height:1;margin:6px 0 4px}
- .feed .lnk{font-size:12px;color:#2563eb}
- .feed.empty{opacity:.5}
- .pcard-foot{display:flex;gap:24px;flex-wrap:wrap;align-items:center;padding:13px 22px;background:#fafbfd;border-top:1px solid #eef1f5;font-size:14px;color:#475569}
- .head-actions{display:flex;gap:8px;flex-wrap:wrap}
- .sec-h{font-size:20px;font-weight:700;margin:30px 0 4px}
- .health-bad{margin:14px 22px 0;padding:11px 14px;border-radius:9px;background:#fff4e5;border:1px solid #ffd8a8;color:#9a3412;font-size:14px;line-height:1.5}
- .health-bad code{background:#ffe3c2;padding:1px 5px;border-radius:4px;font-size:13px}
- .health-ok{color:#16a34a;font-weight:600}
- /* ── страница проекта: галереи фото по площадкам ── */
- .gcard{border-left:5px solid var(--c,#2563eb)}
- .ghead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:2px}
- .ghead h2{margin:0}
- .gdot{width:11px;height:11px;border-radius:50%;background:var(--c,#2563eb);display:inline-block;margin-right:2px}
- .gwhere{color:#64748b;font-size:13.5px}
- .ghint{background:#f6f8fb;border:1px solid #eef1f5;border-radius:8px;padding:9px 12px;font-size:13.5px;line-height:1.5;color:#475569;margin:10px 0}
+ :root{--bg:#f4f6f9;--card:#fff;--line:#e6ebf2;--txt:#1c2430;--mut:#64748b;--acc:#2563eb}
+ *{box-sizing:border-box}
+ body{font-family:system-ui,Segoe UI,Roboto,sans-serif;margin:0;background:var(--bg);color:var(--txt)}
+ a{color:var(--acc);text-decoration:none} a:hover{text-decoration:underline}
+ .top{background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
+ .top-in{max-width:1400px;margin:0 auto;padding:12px 24px;display:flex;align-items:center;gap:20px;flex-wrap:wrap}
+ .brand{font-weight:800;font-size:17px;white-space:nowrap}
+ .tabs{display:flex;gap:6px;flex-wrap:wrap;flex:1}
+ .tab{padding:8px 14px;border-radius:9px;color:#33415a;font-size:14px;font-weight:600;white-space:nowrap;background:#eef2f7}
+ .tab:hover{background:#e2e8f1;text-decoration:none}
+ .tab.on{background:var(--acc);color:#fff}
+ .out{font-size:13px;color:var(--mut)}
+ main{max-width:1400px;margin:0 auto;padding:22px 24px 60px}
+ h1{font-size:26px;margin:0} h2{font-size:19px;margin:30px 0 12px}
+ .muted{color:var(--mut);font-size:13.5px}
+ .hero{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+ .chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+ .chip{background:#eaf1ff;color:#1e40af;border-radius:20px;padding:3px 11px;font-size:12.5px;font-weight:600}
+ .btn{display:inline-block;background:var(--acc);color:#fff;border:0;border-radius:8px;padding:9px 16px;cursor:pointer;font-size:14px;font-weight:600}
+ .btn.gray{background:#eef2f7;color:#33415a} .btn.sm{padding:6px 11px;font-size:13px}
+ .btn:disabled{opacity:.5;cursor:default}
+ .flash{background:#fef9c3;border:1px solid #fde047;border-radius:9px;padding:11px 15px;margin:16px 0}
+ .warn{background:#fff4e5;border:1px solid #ffd8a8;color:#9a3412;border-radius:9px;padding:11px 15px;margin:14px 0;font-size:14px;line-height:1.5}
+ .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 22px;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+ .feeds{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+ .feed{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--c);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:6px}
+ .feed.sel{box-shadow:0 0 0 2px var(--c)}
+ .feed .t{font-weight:700;font-size:14.5px;min-height:38px}
+ .feed .n{font-size:28px;font-weight:800;line-height:1}
+ .feed .n small{font-size:13px;color:var(--mut);font-weight:500}
+ .feed .note{font-size:12.5px;color:var(--mut);line-height:1.4}
+ .feed .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
+ .pills{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+ .pill{padding:7px 13px;border-radius:9px;border:1px solid var(--line);background:#fff;color:#33415a;font-size:13.5px;font-weight:600}
+ .pill.on{background:var(--pc);border-color:var(--pc);color:#fff;text-decoration:none}
+ form.pick{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+ form.pick select{flex:1;min-width:260px;max-width:760px;padding:9px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px}
+ table{border-collapse:collapse;width:100%} td,th{padding:9px 10px;border-bottom:1px solid #eef1f5;text-align:left;font-size:14px;vertical-align:top}
+ th{color:var(--mut);font-weight:600;font-size:12.5px}
+ /* ── галерея ── */
+ .gwrap{max-width:860px}
+ .stage{position:relative;background:#14181f;border-radius:14px;overflow:hidden;aspect-ratio:16/10}
+ .stage img{width:100%;height:100%;object-fit:contain;display:block;background:#14181f}
+ .stage .kind{position:absolute;left:12px;top:12px;color:#fff;font-size:12px;font-weight:700;padding:3px 10px;border-radius:14px;background:var(--kc,#475569)}
+ .stage .cnt{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);background:rgba(20,24,31,.82);color:#fff;font-weight:700;font-size:15px;padding:8px 16px;border-radius:12px;white-space:nowrap}
+ .avito .stage .cnt{left:auto;right:14px;transform:none;font-size:13px;padding:5px 11px;border-radius:8px}
+ .stage .nav{position:absolute;top:50%;transform:translateY(-50%);width:42px;height:42px;border-radius:50%;border:0;background:rgba(255,255,255,.88);font-size:22px;cursor:pointer}
+ .stage .prev{left:12px}.stage .next{right:12px}
+ .stage .over{position:absolute;inset:0;background:rgba(255,255,255,.55);display:none;align-items:center;justify-content:center;font-weight:800;color:#b91c1c;font-size:18px;text-align:center;padding:20px}
+ .thumbs{display:flex;gap:8px;overflow-x:auto;padding:10px 2px 6px}
+ .th{flex:0 0 auto;width:96px;height:68px;border-radius:9px;overflow:hidden;border:3px solid transparent;cursor:pointer;background:#e5e9ef;position:relative}
+ .avito .th{width:76px;height:76px;border-radius:7px}
+ .th img{width:100%;height:100%;object-fit:cover;display:block}
+ .th.on{border-color:var(--pc)} .th.over{opacity:.35}
+ .th .d{position:absolute;right:3px;top:3px;background:#dc2626;color:#fff;font-size:10px;padding:0 5px;border-radius:6px}
+ .mosaic{display:grid;grid-template-columns:2fr 1fr 1fr;grid-template-rows:170px 170px;gap:6px;border-radius:14px;overflow:hidden}
+ .mosaic .m{position:relative;background:#14181f;cursor:pointer;overflow:hidden}
+ .mosaic .m img{width:100%;height:100%;object-fit:cover;display:block}
+ .mosaic .m.big{grid-row:span 2}
+ .mosaic .m .more{position:absolute;inset:0;background:rgba(20,24,31,.6);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px}
+ .mosaic .m .k{position:absolute;left:8px;top:8px;color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:12px;background:var(--kc)}
+ .cap{color:var(--mut);font-size:13.5px;margin:8px 2px}
+ .order{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;margin-top:6px}
+ .oi{border:1px solid var(--line);border-radius:9px;overflow:hidden;background:#fff;font-size:11.5px}
+ .oi img{width:100%;height:80px;object-fit:cover;display:block}
+ .oi .b{padding:4px 6px;border-top:3px solid var(--kc)} .oi.over{opacity:.4}
+ .oi .i{font-weight:800}
+ .legend{display:flex;gap:10px;flex-wrap:wrap;font-size:12.5px;color:#475569;margin:8px 0}
+ .legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;background:var(--kc)}
 </style>
 """
 
-_FLASH = """{% with m=get_flashed_messages() %}{% if m %}
-{% set _j = (m|join(' '))|lower %}
-{% set _err = ('ошибк' in _j) or ('неверн' in _j) or ('не сохранено' in _j) or ('не удалось' in _j) or ('не задана' in _j) %}
-<div class="modal-bg" id="popup" onclick="if(event.target===this)this.remove()">
- <div class="modal">
-  <div class="modal-h" style="color:{{'#dc2626' if _err else '#16a34a'}}">{{'⚠ Внимание' if _err else '✓ Готово'}}</div>
-  <div class="modal-b">{{m|join('<br>')|safe}}</div>
-  <button class="btn{{' red' if _err else ' green'}}" onclick="document.getElementById('popup').remove()">OK</button>
- </div>
-</div>
-<script>document.addEventListener('keydown',function(e){if(e.key==='Escape'){var p=document.getElementById('popup');if(p)p.remove();}});</script>
-{% endif %}{% endwith %}"""
+_LOGIN_HTML = _CSS + """<title>Вход — фиды</title>
+<main style="max-width:380px;padding-top:80px"><h1>Панель управления фидами</h1>
+{% with m=get_flashed_messages() %}{% for x in m %}<div class=flash>{{x}}</div>{% endfor %}{% endwith %}
+<div class=card style="margin-top:18px"><form method=post>
+ <label class=muted>Пароль</label><br>
+ <input type=password name=password autofocus style="width:100%;padding:9px;margin:6px 0 14px;border:1px solid #cbd5e1;border-radius:8px">
+ <button class=btn>Войти</button></form></div></main>"""
 
-_LOGIN_HTML = _CSS + """<title>Вход — фиды</title><h1>Панель управления фидами</h1>""" + _FLASH + """
-<div class=card style="max-width:360px">
- <form method=post>
-  <label>Пароль</label>
-  <input type=password name=password autofocus>
-  <div style="margin-top:14px"><button class=btn>Войти</button></div>
- </form>
-</div>"""
+_TAB_HTML = _CSS + """<title>{{cur.title}} — фиды</title>
+<div class=top><div class=top-in>
+ <div class=brand>Фиды · St Michael</div>
+ <nav class=tabs>{% for t in tabs %}<a class="tab{{' on' if t.key==cur.key else ''}}" href="{{url_for('admin.tab_page',tab=t.key)}}">{{t.title}}</a>{% endfor %}</nav>
+ <a class=out href="{{url_for('admin.logout')}}">Выйти</a>
+</div></div>
+<main>
+{% with m=get_flashed_messages() %}{% for x in m %}<div class=flash>{{x}}</div>{% endfor %}{% endwith %}
 
-_DASH_HTML = _CSS + """<title>Фиды</title>
-<h1>🏠 Фиды квартир</h1>""" + _FLASH + """
-<div class="card hero">
- <p><b>Что это.</b> Для каждого жилого комплекса здесь автоматически собираются готовые фиды (файлы XML) для площадок объявлений — с нашими планировками, фото и видами из окон.</p>
- <p style="margin:0"><b>Как пользоваться.</b> Дайте площадке ссылку «XML» из нужной плитки — она сама заберёт квартиры. Кнопка «Открыть» — управление фото и настройками фида.</p>
- <div class=legend>
-  <span>🔢 <b>число</b> — квартир в фиде</span>
-  <span>🔗 <b>открыть XML</b> — ссылка для площадки</span>
-  <span>⚙️ <b>Открыть</b> — фото и настройки</span>
- </div>
-</div>
-
-{% for r in rows %}
-<div class=pcard>
- <div class=pcard-head>
-  <div>
-   <div class=pcard-title>{{r.name}}</div>
-   <div class=pcard-sub>код: {{r.slug}}{% if r.status.get('ts') %} · обновлён {{r.status.ts}}{% if r.status.get('enriched_ok') %} · планировок {{r.status.enriched_ok}}{% endif %}{% endif %}</div>
+<div class=hero>
+ <div>
+  <h1>{{cur.title}}</h1>
+  <div class=muted>{{cur.sub}}</div>
+  <div class=chips>
+   {% if st.get('ts') %}<span class=chip>обновлён {{st.ts}}</span>{% endif %}
+   {% if st.get('lots_total') %}<span class=chip>лотов в выгрузке: {{st.lots_total}}</span>{% endif %}
+   {% if st.get('enriched_ok') %}<span class=chip>планировок нарисовано: {{st.enriched_ok}}</span>{% endif %}
+   <span class=chip style="background:#eef2f7;color:#475569">только просмотр — правки делаются на Яндекс.Диске и в ProfitBase</span>
   </div>
-  <a class="btn big" href="{{url_for('admin.project',slug=r.slug)}}">⚙️ Открыть</a>
  </div>
- {% if not r.health.ok %}
- <div class=health-bad>
-  ⚠️ <b>Требует настройки.</b> Новый корпус без привязки к Яндексу:
-  {% for m in r.health.missing %}<b>{{m.house}}</b> ({{m.lots}} лот.){% if not loop.last %}, {% endif %}{% endfor %}.
-  Добавьте id в <code>yandex_house_ids</code> (и проверьте, заведён ли корпус на ДомКлике) — иначе Яндекс&nbsp;Поиск отклонит эти лоты.
+ <form method=post action="{{url_for('admin.refresh',tab=cur.key)}}"><button class=btn{{' disabled' if running else ''}}>{{'⏳ идёт пересборка…' if running else '↻ Обновить фиды'}}</button></form>
+</div>
+
+{% if not health.ok %}
+<div class=warn>⚠️ <b>Требует настройки.</b> Новый корпус без привязки к Яндексу:
+ {% for m in health.missing %}<b>{{m.house}}</b> ({{m.lots}} лот.){% if not loop.last %}, {% endif %}{% endfor %}.
+ Нужно добавить id корпуса в <code>yandex_house_ids</code> — иначе Яндекс Поиск отклонит эти лоты.</div>
+{% endif %}
+
+<h2>Фиды для площадок</h2>
+<div class=feeds>
+{% for f in feeds %}{% set i=infos[f.key] %}
+ <div class="feed{{' sel' if sel and sel.key==f.key else ''}}" style="--c:{{ {'cian':'#2563eb','avito':'#16a34a','yandex':'#fc3f1d','yandex_realty':'#f59e0b','domclick':'#0d9488','site':'#7c3aed'}[f.platform] }}">
+  <div class=t>{{f.title}}</div>
+  <div class=n>{{i.count or '—'}} <small>лотов{% if i.photos %} · {{i.photos}} фото{% endif %}</small></div>
+  {% if i.updated %}<div class=muted>обновлён {{i.updated}}</div>{% endif %}
+  {% if f.note %}<div class=note>{{f.note}}</div>{% endif %}
+  <div class=acts>
+   {% if i.public %}<a class="btn sm" href="{{i.public}}" target=_blank>XML ↗</a>
+   <button class="btn gray sm" type=button onclick="navigator.clipboard.writeText('{{i.public}}');this.textContent='скопировано ✓'">копировать ссылку</button>{% endif %}
+   <a class="btn gray sm" href="{{url_for('admin.tab_page',tab=cur.key,feed=f.key)}}#preview">👁 превью</a>
+  </div>
+  {% if f.source_url %}<div class=note>Источник: <a href="{{f.source_url}}" target=_blank>ProfitBase ↗</a></div>{% endif %}
  </div>
+{% endfor %}
+</div>
+
+{% if sel %}
+<h2 id=preview>Превью галереи «как на площадке»</h2>
+<div class=card style="--pc:{{plat.color}}">
+ <div class=pills>
+  {% for f in feeds %}<a class="pill{{' on' if f.key==sel.key else ''}}" style="--pc:{{ {'cian':'#2563eb','avito':'#16a34a','yandex':'#fc3f1d','yandex_realty':'#f59e0b','domclick':'#0d9488','site':'#7c3aed'}[f.platform] }}" href="{{url_for('admin.tab_page',tab=cur.key,feed=f.key)}}#preview">{{f.title}}</a>{% endfor %}
+ </div>
+ {% if not opts %}<div class=muted>В этом фиде пока нет лотов.</div>{% else %}
+ <form class=pick method=get action="#preview">
+  <input type=hidden name=feed value="{{sel.key}}">
+  <a class="btn gray sm" href="{{url_for('admin.tab_page',tab=cur.key,feed=sel.key,lot=prev_id)}}#preview" {{'style=visibility:hidden' if not prev_id}}>←</a>
+  <select name=lot onchange="this.form.submit()">
+   {% for o in opts %}<option value="{{o.id}}"{{' selected' if o.id==lot.id else ''}}>{{lot_label(o)}}</option>{% endfor %}
+  </select>
+  <a class="btn gray sm" href="{{url_for('admin.tab_page',tab=cur.key,feed=sel.key,lot=next_id)}}#preview" {{'style=visibility:hidden' if not next_id}}>→</a>
+ </form>
+ <div class=muted style="margin-bottom:10px">{{sel.title}} · лот <b>{{lot.id}}</b> · {{lot.title}}{% if lot.meta %} · {{lot.meta|join(' · ')}}{% endif %}</div>
+
+ {% if plat.limit and photos|length > plat.limit %}
+ <div class=warn>Всего фото у лота: {{photos|length}}. {{plat.name}} берёт первые <b>{{plat.limit}}</b> — остальные ({{photos|length - plat.limit}}) в карточку не попадут (на превью бледные).</div>
  {% endif %}
- <div class=feeds>
-  {% set feeds = [
-     ('ЦИАН', r.cian, r.slug ~ '.xml', '#2563eb'),
-     ('Авито', r.avito, r.slug ~ '-avito.xml', '#16a34a'),
-     ('Яндекс.Недвижимость', r.yandex, r.slug ~ '-yandex.xml', '#fc3f1d'),
-     ('Яндекс Поиск (новый)', r.yandex_realty, r.slug ~ '-yandex-realty.xml', '#f59e0b'),
-     ('ДомКлик', r.domclick, r.slug ~ '-domclick.xml', '#0d9488'),
-  ] %}
-  {% for name,cnt,path,color in feeds %}
-  <a class="feed{% if not cnt %} empty{% endif %}" style="--c:{{color}}" href="{{base}}/feed/{{path}}" target=_blank>
-   <div class=plat>{{name}}</div>
-   <div class=cnt>{{cnt or '—'}}</div>
-   <div class=lnk>открыть XML ↗</div>
-  </a>
-  {% endfor %}
- </div>
- <div class=pcard-foot>
-  <span>📷 Фото карточки: Авито <b>{{r.photos}}</b> · Яндекс <b>{{r.photos_y}}</b> · ЦИАН <b>{{r.photos_c}}</b></span>
-  <span>🪟 Виды из окон: <b>{{r.views}}</b> · <a href="{{url_for('admin.views_page',slug=r.slug)}}">список / загрузить</a></span>
-  {% if r.health.ok %}<span class=health-ok>✓ все лоты покрыты</span>{% endif %}
- </div>
-</div>
-{% endfor %}
+ {% if photos|selectattr('dup')|list %}<div class=warn>В галерее есть повторяющиеся ссылки на одно и то же фото (помечены «дубль»).</div>{% endif %}
+ {% if not photos %}<div class=muted>У этого лота нет фото в фиде.</div>{% else %}
 
-<div class=sec-h>📡 Общий фид для Яндекс Поиск Недвижимости</div>
-<p class=muted style="margin:0 0 14px">Новый формат Яндекса, <b>Зорге + Б37 в одном файле</b> (только квартиры и апартаменты). Эту ссылку и даём Яндексу — он сам раскидывает лоты по нужным ЖК. Отдельные фиды по проектам выше тоже остаются.</p>
-<div class=pcard>
- <div class=pcard-head>
-  <div>
-   <div class=pcard-title>Яндекс Поиск — общий фид</div>
-   <div class=pcard-sub>Зорге 9 (апартаменты) + Квартал Серебряный Бор (квартиры)</div>
+ <div class="gwrap {{plat.layout if plat.layout=='avito' else ''}}" id=gal>
+  {% if plat.layout=='mosaic' %}
+   <div class=mosaic id=mosaic></div>
+   <div class=cap>Так Яндекс показывает начало галереи: одно крупное фото и мозаика из следующих. Остальные — по кнопке «Все {{photos|length}} фото».</div>
+   <button class="btn gray sm" type=button onclick="document.getElementById('full').style.display='block';this.style.display='none'">Все {{photos|length}} фото</button>
+   <div id=full style="display:none;margin-top:10px">
+  {% endif %}
+  <div class=stage id=stage>
+   <img id=main alt="">
+   <span class=kind id=kind></span>
+   <span class=cnt id=cnt></span>
+   <button class="nav prev" type=button onclick="go(-1)">‹</button><button class="nav next" type=button onclick="go(1)">›</button>
+   <div class=over id=overmsg>Не попадёт в карточку:<br>лимит {{plat.name}} — {{plat.limit}} фото</div>
   </div>
+  <div class=thumbs id=thumbs></div>
+  {% if plat.layout=='mosaic' %}</div>{% endif %}
  </div>
- <div class=feeds>
-  <a class="feed{% if not combined_yr %} empty{% endif %}" style="--c:#f59e0b" href="{{base}}/feed/yandex-realty.xml" target=_blank>
-   <div class=plat>Я.Поиск (общий)</div>
-   <div class=cnt>{{combined_yr or '—'}}</div>
-   <div class=lnk>открыть XML ↗</div>
-  </a>
- </div>
-</div>
+ <div class=cap id=cap></div>
 
-<div class=sec-h>🏢 Коммерческие помещения</div>
-<p class=muted style="margin:0 0 14px">Фиды нежилых помещений — офисы, торговля, аренда.</p>
-{% for c in comm_cards %}
-<div class=pcard>
- <div class=pcard-head>
-  <div>
-   <div class=pcard-title>{{c.name}}</div>
-   <div class=pcard-sub>{{c.sub}}</div>
-  </div>
-  <div class=head-actions>
-   {% if c.settings %}<a class="btn gray" href="{{c.settings}}">⚙️ Атрибуты</a>{% endif %}
-   {% if c.preview %}<a class="btn gray" href="{{c.preview}}" target=_blank>👁 Превью</a>{% endif %}
-   <form method=post action="{{c.refresh}}" style="margin:0"><button class="btn green">↻ Обновить</button></form>
-  </div>
+ <div class=legend>{% for k,(lbl,col) in kinds.items() %}{% if photos|selectattr('k','equalto',k)|list %}<span style="--kc:{{col}}"><i></i>{{lbl}} × {{photos|selectattr('k','equalto',k)|list|length}}</span>{% endif %}{% endfor %}</div>
+ <h3 style="margin:18px 0 6px;font-size:15px">Порядок фото в фиде</h3>
+ <div class=order>
+  {% for p in photos %}<a class="oi{{' over' if p.over else ''}}" style="--kc:{{p.c}}" href="{{p.u}}" target=_blank title="{{p.u}}">
+   <img src="{{p.u}}" loading=lazy alt=""><div class=b><span class=i>{{loop.index}}</span> {{p.l}}{{' · дубль' if p.dup else ''}}</div></a>{% endfor %}
  </div>
- <div class=feeds>
-  {% for t in c.tiles %}
-  <a class="feed{% if not t.cnt %} empty{% endif %}" style="--c:{{t.color}}" href="{{t.url}}" target=_blank>
-   <div class=plat>{{t.plat}}</div>
-   <div class=cnt>{{t.cnt or '—'}}</div>
-   <div class=lnk>открыть XML ↗</div>
-  </a>
-  {% endfor %}
-  {% if not c.tiles %}<div class=muted style="padding:8px">Площадки не выбраны — задайте в мастере.</div>{% endif %}
- </div>
+ <script>
+  const P={{photos|tojson}}, LAYOUT={{plat.layout|tojson}}, NAME={{plat.name|tojson}}, LIMIT={{(plat.limit or 0)|tojson}};
+  let i=0;
+  const $=id=>document.getElementById(id);
+  function show(n){
+    i=(n+P.length)%P.length; const p=P[i];
+    $('main').src=p.u; $('kind').textContent=p.l; $('kind').style.setProperty('--kc',p.c);
+    $('cnt').textContent=(LAYOUT==='avito')?(i+1)+' / '+P.length:P.length+' фото';
+    $('overmsg').style.display=p.over?'flex':'none';
+    $('cap').textContent='Фото '+(i+1)+' из '+P.length+' · '+p.l;
+    document.querySelectorAll('#thumbs .th').forEach((t,k)=>t.classList.toggle('on',k===i));
+    const t=document.querySelector('#thumbs .th.on'); if(t) t.scrollIntoView({block:'nearest',inline:'center'});
+  }
+  function go(d){show(i+d)}
+  P.forEach((p,k)=>{
+    const d=document.createElement('div'); d.className='th'+(p.over?' over':'');
+    d.innerHTML='<img loading=lazy src="'+p.u+'">'+(p.dup?'<span class=d>дубль</span>':'');
+    d.onclick=()=>show(k); $('thumbs').appendChild(d);
+  });
+  if(LAYOUT==='mosaic'){
+    const m=$('mosaic'), n=Math.min(5,P.length);
+    for(let k=0;k<n;k++){
+      const c=document.createElement('div'); c.className='m'+(k===0?' big':'');
+      c.innerHTML='<img src="'+P[k].u+'"><span class=k style="--kc:'+P[k].c+'">'+P[k].l+'</span>'+
+        ((k===n-1&&P.length>n)?'<div class=more>+'+(P.length-n)+' фото</div>':'');
+      c.onclick=()=>{$('full').style.display='block';show(k)}; m.appendChild(c);
+    }
+  }
+  show(0);
+  document.addEventListener('keydown',e=>{if(e.key==='ArrowLeft')go(-1);if(e.key==='ArrowRight')go(1)});
+ </script>
+ {% endif %}{% endif %}
 </div>
-{% endfor %}
-<p style="margin-top:16px"><a class="btn gray" href="{{url_for('admin.commercial_page')}}">⚙️ Мастер: добавить / изменить / удалить фид →</a></p>
-<p class=muted style="margin-top:20px"><a href="{{url_for('admin.logout')}}">Выйти</a></p>"""
+{% endif %}
 
-_VIEWS_HTML = _CSS + """<title>Виды — {{name}}</title>
-<p><a href="{{url_for('admin.dashboard')}}">← все фиды</a> · <a href="{{url_for('admin.project',slug=slug)}}">{{name}}</a></p>
-<h1>Виды из окон — {{name}}</h1>""" + _FLASH + """
+{% if sources %}
+<h2>Откуда берутся фото</h2>
 <div class=card>
- <p>Лотов с видами: <b class=ok>{{have}}</b> из {{total}}. Без видов — <b class=bad>{{total-have}}</b> (вверху).
-   <form method=post action="{{url_for('admin.views_resync',slug=slug)}}" style="display:inline;margin-left:10px" id=syncform>
-     <button class="btn green" id=syncbtn>↻ Синхронизировать с Я.Диска</button></form>
-   <span id=syncwait style="display:none;margin-left:10px;color:#6b7280">⏳ Идёт синхронизация с Я.Диском… (1–2 мин, можно не ждать)</span></p>
-<script>
-(function(){
- var syncing = {{ 'true' if syncing else 'false' }};
- function popup(ok, text){
-   var bg=document.createElement('div'); bg.className='modal-bg';
-   bg.onclick=function(e){if(e.target===bg)bg.remove();};
-   bg.innerHTML='<div class="modal"><div class="modal-h" style="color:'+(ok?'#16a34a':'#dc2626')+'">'+
-     (ok?'✓ Готово':'⚠ Внимание')+'</div><div class="modal-b">'+text+'</div>'+
-     '<button class="btn '+(ok?'green':'red')+'">OK</button></div>';
-   bg.querySelector('button').onclick=function(){bg.remove();};
-   document.body.appendChild(bg);
- }
- if(syncing){
-   var b=document.getElementById('syncbtn'); if(b){b.disabled=true;}
-   document.getElementById('syncwait').style.display='inline';
-   var poll=setInterval(function(){
-     fetch('{{url_for("admin.views_sync_status",slug=slug)}}',{credentials:'same-origin'})
-      .then(function(r){return r.json();})
-      .then(function(s){
-        if(s.state==='done'){
-          clearInterval(poll);
-          popup(true,'Синхронизация с Я.Диском завершена.<br>Лотов в фиде: <b>'+(s.lots)+
-            '</b><br>Из них с видами из окон: <b>'+(s.lots_with_views)+
-            '</b><br>Всего фото видов: <b>'+(s.view_files)+'</b>');
-          document.getElementById('syncwait').style.display='none';
-        } else if(s.state==='error'){
-          clearInterval(poll);
-          popup(false,'Ошибка синхронизации: '+(s.error||''));
-          document.getElementById('syncwait').style.display='none';
-        }
-      }).catch(function(){});
-   },3000);
- }
-})();
-</script>
- <p class=muted>Виды зеркалятся из Я.Диска (удаления в ЯД подхватываются; авто-синк раз в час). Можно править вручную: <b>✕</b> — удалить, <b>＋</b> — загрузить (ручные сохраняются как «u…», синк с ЯД их не трогает).</p>
- <table>
-  <tr><th>Лот · Корпус · Этаж · Тип · Площадь</th><th>Виды (✕ удалить, ＋ добавить)</th></tr>
-  {% for r in rows %}
-  <tr style="{% if r.n==0 %}background:#fff5f5{% endif %}">
-   <td><b>{{r.id}}</b> · {{r.house}} · эт.{{r.floor}} · {{r.label}} · {{r.area}} м²<br>
-       <span class="{% if r.n %}ok{% else %}bad{% endif %}">видов: {{r.n or 'нет'}}</span></td>
-   <td>
-     {% for fn in r.files %}
-     <span style="position:relative;display:inline-block;margin:2px">
-       <img src="{{base}}/views/{{slug}}/{{r.id}}/{{fn}}" style="width:132px;height:96px;object-fit:cover;border-radius:6px;border:1px solid #ddd">
-       <form method=post action="{{url_for('admin.views_delete',slug=slug,lot=r.id)}}" style="position:absolute;top:2px;right:2px;margin:0">
-         <input type=hidden name=name value="{{fn}}">
-         <button class=del onclick="return confirm('Удалить {{fn}}?')">✕</button></form>
-     </span>
-     {% endfor %}
-     <form method=post action="{{url_for('admin.views_upload',slug=slug,lot=r.id)}}" enctype=multipart/form-data style="display:inline">
-       <input type=file name=photos accept="image/*" multiple style="width:200px;font-size:13px">
-       <button class=btn style="padding:5px 9px">＋</button></form>
-   </td>
-  </tr>
-  {% endfor %}
+ <table><tr><th>Что</th><th>Ссылка на Яндекс.Диск</th><th>Папка</th><th>Куда идёт</th></tr>
+ {% for what,url,folder,where in sources %}<tr><td>{{what}}</td><td><a href="{{url}}" target=_blank>{{url.replace('https://','')}}</a></td><td>{{folder or '—'}}</td><td>{{where}}</td></tr>{% endfor %}
  </table>
+ <p class=muted style="margin:12px 0 0">Фото берутся только с Яндекс.Диска: раз в час синк зеркалит папки (добавили или удалили файл на диске — изменится в фидах). Планировки и планы этажей приходят из ProfitBase.</p>
 </div>
-<p class=muted><a href="{{url_for('admin.logout')}}">Выйти</a></p>"""
-
-_COMM_HTML = _CSS + """<title>Коммерческие фиды</title>
-<p><a href="{{url_for('admin.dashboard')}}">← все фиды</a></p>
-<h1>Мастер фидов (коммерция / аренда)</h1>""" + _FLASH + """
-<div class=card>
- <h2 style="margin-top:0">Готовые фиды</h2>
- {% if not rows %}<p class=muted>Пока нет. Добавьте ниже.</p>{% endif %}
- {% for r in rows %}
-  <div style="border-bottom:1px solid #eef1f5;padding:10px 0">
-   <b>{{r.p.name}}</b> <span class=pill>{{r.slug}}</span> · лотов ~{{r.n}}, планировок {{r.enriched}}
-   <div class=muted style="margin:4px 0">{{r.p.source_url[:70]}}…</div>
-   <div>Фиды:
-    {% for pl in r.p.platforms %}<a href="{{base}}/feed/comm/{{r.slug}}-{{pl}}.xml" target=_blank>{{pl}}</a>{% if not loop.last %} · {% endif %}{% endfor %}
-    {% if not r.p.platforms %}<span class=muted>площадки не выбраны</span>{% endif %}
-   </div>
-   <form method=post action="{{url_for('admin.commercial_refresh',slug=r.slug)}}" style="display:inline">
-     <button class="btn green">Пересформировать</button></form>
-   <form method=post action="{{url_for('admin.commercial_delete',slug=r.slug)}}" style="display:inline">
-     <button class="btn red" onclick="return confirm('Удалить {{r.slug}}?')">Удалить</button></form>
-  </div>
- {% endfor %}
-</div>
-<div class=card>
- <h2 style="margin-top:0">Отдельные фиды (через ProfitBase API)</h2>
- <p class=muted>Собираются кодом, не через мастер. Состав/назначения правятся в коде.</p>
- {% for d in dedicated %}
-  <div style="border-bottom:1px solid #eef1f5;padding:10px 0">
-   <b>{{d.name}}</b> · лотов {{d.n}}
-   <div style="margin:4px 0">
-     <a href="{{base}}{{d.feed}}" target=_blank>XML</a> ·
-     <a href="{{base}}/?feed={{d.key}}" target=_blank>превью карточек</a>
-   </div>
-   <form method=post action="{{base}}{{d.refresh}}" style="display:inline">
-     <button class="btn green">Обновить</button></form>
-  </div>
- {% endfor %}
-</div>
-<div class=card>
- <h2 style="margin-top:0">Добавить / обновить фид</h2>
- <form method=post action="{{url_for('admin.commercial_save')}}">
-  <label>Название</label><input type=text name=name placeholder="Например: Б37 Коммерция">
-  <label>Код (slug, латиницей; пусто = авто)</label><input type=text name=slug placeholder="b37comm">
-  <label>Ссылка на фид ProfitBase (profitbase_xml)</label><input type=text name=source_url placeholder="https://pb7828.profitbase.ru/export/profitbase_xml/...">
-  <label>Площадки</label>
-  <div><label style="display:inline"><input type=checkbox name=cian checked> ЦИАН</label>
-   <label style="display:inline;margin-left:14px"><input type=checkbox name=avito checked> Авито</label>
-   <label style="display:inline;margin-left:14px"><input type=checkbox name=yandex checked> Яндекс</label></div>
-  <label>Адрес</label><input type=text name=address placeholder="Москва, улица Берзарина, 37">
-  <div class=row><div class=col><label>Телефон</label><input type=text name=phone placeholder="+74952924193"></div>
-   <div class=col><label>Организация</label><input type=text name=org placeholder="St MICHAEL"></div></div>
-  <label>Сайт (опц.)</label><input type=text name=url placeholder="https://stmichael.ru">
-  <label>Папка Я.Диска с картинками — фолбэк, если в ProfitBase их нет (опц.)</label>
-  <input type=text name=yadisk_fallback placeholder="https://disk.360.yandex.ru/d/...">
-  <div style="margin-top:14px"><button class=btn>Сформировать фид</button></div>
- </form>
- <p class=muted style="margin-top:10px">⚠️ Коммерческие схемы площадок строже жилья — после формирования прогоните фид через валидатор площадки (например autoload.avito.ru/format/xmlcheck). Обогащённые планировки — на шаблоне с подписями Площадь/Высота/Мощность.</p>
-</div>
-<p class=muted><a href="{{url_for('admin.logout')}}">Выйти</a></p>"""
-
-_COMM_AVITO_HTML = _CSS + """<title>Авито-коммерция — атрибуты</title>
-<p><a href="{{url_for('admin.dashboard')}}">← все фиды</a></p>
-<h1>Авито-коммерция — атрибуты по умолчанию</h1>""" + _FLASH + """
-<div class=card>
- <p style="margin-top:0">Эти значения проставляются во <b>все объявления</b> Avito-коммерции (Зорге + Б37) — в обязательные поля Авито, которых нет в ProfitBase. Меняешь → фид сразу пересобирается.</p>
- <form method=post action="{{url_for('admin.comm_avito_save')}}">
-  <div class=row>
-  {% for k in fields %}
-   <div class=col style="min-width:230px;flex:0 0 230px">
-    <label>{{labels[k]}}</label>
-    <select name="{{k}}">
-     {% for opt in choices[k] %}<option {% if current[k]==opt %}selected{% endif %}>{{opt}}</option>{% endfor %}
-    </select>
-   </div>
-  {% endfor %}
-  </div>
-  <div style="margin-top:18px"><button class=btn>Сохранить и пересобрать фид</button></div>
- </form>
-</div>
-<p class=muted>Габариты (Width/Length) и Layout не заполняются — уточняются по отчёту валидатора Авито. Отдельно стоящие здания всегда получают тип «Другой» независимо от выбора выше.</p>
-<p class=muted><a href="{{url_for('admin.logout')}}">Выйти</a></p>"""
-
-_PROJ_HTML = _CSS + """<title>{{proj.name}}</title>
-<p><a href="{{url_for('admin.dashboard')}}">← все фиды</a> · <a href="{{url_for('admin.views_page',slug=slug)}}">виды из окон</a></p>
-<h1>{{proj.name}} <span class=pill>{{slug}}</span></h1>""" + _FLASH + """
-
-<div class=row>
- <div class=col>
-  <div class=card>
-   <h2 style="margin-top:0">Авито-фид</h2>
-   <p>Объявлений: <b>{{check.ads}}</b> · <a href="{{base}}/feed/{{slug}}-avito.xml" target=_blank>открыть XML</a></p>
-   {% if check.issues %}
-     <p class=bad>Проблемы обязательных полей:</p>
-     <ul>{% for k,v in check.issues.items() %}<li>{{k}}: пропусков {{v}}</li>{% endfor %}</ul>
-   {% else %}<p class=ok>✓ Обязательные поля Авито заполнены у всех объявлений</p>{% endif %}
-   <form method=post action="{{url_for('admin.refresh',slug=slug)}}">
-     <label><input type=checkbox name=force> заодно перерисовать планировки (если меняли рассрочку)</label>
-     <button class=btn green>Обновить фид</button>
-   </form>
-  </div>
- </div>
-
- <div class=col>
-  <div class=card>
-   <h2 style="margin-top:0">Настройки</h2>
-   <form method=post action="{{url_for('admin.save_settings',slug=slug)}}">
-    <label>Отделка по умолчанию (где ProfitBase не отдал)</label>
-    <input type=text name=decoration list=decor value="{{proj.get('avito_default_decoration','')}}">
-    <datalist id=decor>{% for d in decor %}<option value="{{d}}">{% endfor %}</datalist>
-    <label>Материал дома (HouseType, необязательно)</label>
-    <input type=text name=house_type list=house value="{{proj.get('avito_house_type','')}}">
-    <datalist id=house>{% for h in house %}<option value="{{h}}">{% endfor %}</datalist>
-    <label>Тип рынка</label>
-    <select name=market_type>
-     {% for m in ['Новостройка','Вторичка'] %}<option {% if proj.get('avito_market_type')==m %}selected{% endif %}>{{m}}</option>{% endfor %}
-    </select>
-    <label>Скидка к цене из фида, %</label>
-    <input type=text name=discount value="{{proj.get('price_discount_pct',0)}}">
-    <div class=muted>0 = цену не трогаем. Ставить 20, когда ProfitBase начнёт отдавать полную (несо&shy;скидочную) стоимость, иначе будет двойная скидка.</div>
-    <label style="margin-top:12px"><input type=checkbox name=replace_bi {% if proj.get('avito_replace_building_image',True) %}checked{% endif %}> заменять остальные фото ProfitBase нашими</label>
-    <label>Приписка к описанию (добавится в конец каждого)</label>
-    <textarea name=description_suffix rows=3>{{proj.get('description_suffix','')}}</textarea>
-    {% if has_installment %}
-     <h2>Рассрочка</h2>
-     <label>Делитель цены (feed→base)</label><input type=text name=inst_div value="{{proj.installment.feed_to_base_divisor}}">
-     <label>Первый взнос, доля</label><input type=text name=inst_pv value="{{proj.installment.down_payment_pct}}">
-     <label>Платёж/мес, доля от base</label><input type=text name=inst_m value="{{proj.installment.monthly_pct_of_base}}">
-    {% endif %}
-    <div style="margin-top:14px"><button class=btn>Сохранить настройки</button></div>
-   </form>
-  </div>
- </div>
-</div>
-
-<div class=sec-h>📷 Фото карточек по площадкам</div>
-<p class=muted style="margin:0 0 14px">У каждой площадки свой набор фото. Первой в карточке всегда идёт наша <b>планировка</b>{% if plan %} (плитка с пунктиром){% endif %}, затем эти фото, затем виды из окон.</p>
-{% for g in galleries %}
-<div class="card gcard" style="--c:{{g.color}}">
- <div class=ghead>
-  <h2><span class=gdot></span>{{g.title}}</h2>
-  <span class=pill>{{g.photos|length}} фото</span>
-  <span class=gwhere>{{g.where}}</span>
- </div>
- <div class=ghint>
-  Порядок в карточке: <b>планировка → эти фото → виды из окон</b>.
-  Перетаскивайте мышкой, чтобы менять порядок · <b>✕</b> удалить · плитка <b>＋</b> добавить. Применяется сразу.
-  {% if g.mirror %}<br>🔄 Это <b>зеркало папки Я.Диска</b>: синхронизируется автоматически (раз в час) и по кнопке ниже — добавления и удаления в ЯД подхватываются. Удаление здесь временно; чтобы убрать навсегда — удалите фото в самой папке Я.Диска.{% endif %}
-  · <a href="{{g.feed}}" target=_blank>открыть XML фида ↗</a>
- </div>
- <div class=strip data-kind="{{g.kind}}"
-      data-upload="{{url_for('admin.upload_photos',slug=slug,kind=g.kind)}}"
-      data-delete="{{url_for('admin.delete_photo',slug=slug,kind=g.kind)}}"
-      data-order="{{url_for('admin.reorder_photos',slug=slug,kind=g.kind)}}">
-   {% if plan %}<div class="tile locked"><img src="{{plan}}"><span class=lbl>планировка</span></div>{% endif %}
-   {% for n in g.photos %}
-   <div class=tile draggable=true data-name="{{n}}">
-     <img src="{{base}}/{{g.url}}/{{slug}}/{{n}}" loading=lazy>
-     <button class=del title="Удалить">✕</button>
-     <span class=num>{{loop.index}}</span>
-   </div>
-   {% endfor %}
-   <label class="tile add" title="Загрузить фото">＋<input type=file accept="image/*" multiple hidden></label>
- </div>
- {% if g.has_yd %}<form method=post action="{{url_for('admin.sync_yd',slug=slug,kind=g.kind)}}" style="margin-top:12px">
-  <button class="btn gray">↻ Синхронизировать с Яндекс.Диска</button>
- </form>{% endif %}
-</div>
-{% endfor %}
-<div id=busy class=muted style="display:none;margin:10px 0">Сохраняю, обновляю фид…</div>
-<p class=muted><a href="{{url_for('admin.logout')}}">Выйти</a></p>
-<script>
-(function(){
- var busy=document.getElementById('busy');
- function post(url,body){ busy.style.display='block';
-   fetch(url,{method:'POST',body:body,credentials:'same-origin'}).then(function(){location.reload();})
-   .catch(function(){busy.textContent='Ошибка, попробуйте ещё раз';}); }
- document.querySelectorAll('.strip').forEach(function(strip){
-   var drag=null;
-   strip.addEventListener('click',function(e){
-     var b=e.target.closest('.del'); if(!b) return;
-     var tile=b.closest('.tile'); if(!confirm('Удалить это фото?')) return;
-     var fd=new FormData(); fd.append('name',tile.dataset.name);
-     post(strip.dataset.delete,fd); });
-   var up=strip.querySelector('input[type=file]');
-   if(up) up.addEventListener('change',function(){
-     if(!up.files.length) return; var fd=new FormData();
-     for(var i=0;i<up.files.length;i++) fd.append('photos',up.files[i]);
-     post(strip.dataset.upload,fd); });
-   strip.addEventListener('dragstart',function(e){
-     var t=e.target.closest('.tile[draggable=true]'); if(!t) return;
-     drag=t; t.classList.add('dragging'); });
-   strip.addEventListener('dragend',function(){ if(drag) drag.classList.remove('dragging'); drag=null;
-     strip.querySelectorAll('.dragover').forEach(function(x){x.classList.remove('dragover');}); });
-   strip.addEventListener('dragover',function(e){ e.preventDefault();
-     var t=e.target.closest('.tile[draggable=true]');
-     strip.querySelectorAll('.dragover').forEach(function(x){x.classList.remove('dragover');});
-     if(t&&t!==drag) t.classList.add('dragover'); });
-   strip.addEventListener('drop',function(e){ e.preventDefault();
-     var t=e.target.closest('.tile[draggable=true]'); if(!drag||!t||t===drag) return;
-     var ts=[].slice.call(strip.querySelectorAll('.tile[draggable=true]'));
-     if(ts.indexOf(drag)<ts.indexOf(t)) t.after(drag); else t.before(drag);
-     var order=[].slice.call(strip.querySelectorAll('.tile[draggable=true]')).map(function(x){return x.dataset.name;});
-     var fd=new FormData(); order.forEach(function(n){fd.append('order',n);});
-     post(strip.dataset.order,fd); });
- });
-})();
-</script>"""
+{% endif %}
+</main>"""

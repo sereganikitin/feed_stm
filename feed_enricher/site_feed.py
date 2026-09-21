@@ -1,13 +1,13 @@
 """Фид для корпоративного сайта: копия profitbase_xml из ProfitBase (та же структура —
 цены, special-offers, статусы, кастомные поля не трогаем), в который к лотам Зорге 9 и
 Квартала Серебряный Бор дописаны наши фото с Я.Дисков сразу после последней планировки:
-интерьер → визуализация → вид из окна → общие фото проекта.
+интерьер → визуализация → вид из окна (общие фото проекта не добавляем).
 
 Роут /feed/profitbase-site.xml ; триггер POST /refresh-site-feed.
 """
 import xml.etree.ElementTree as ET
 
-from .config import CACHE_DIR, PROJECTS, lot_view_groups, cian_extra_urls
+from .config import CACHE_DIR, PROJECTS, lot_view_groups
 from .parser import download_feed
 
 SITE_DIR = CACHE_DIR / "site"
@@ -18,7 +18,6 @@ OUT = SITE_DIR / "profitbase.xml"
 TYPE_INTERIOR = "interior"
 TYPE_VISUAL = "visualization"
 TYPE_VIEW = "view"
-TYPE_PHOTO = "photo"
 
 
 def _slug_of(project_name: str) -> str:
@@ -40,7 +39,6 @@ def refresh(reuse_original: bool = False) -> dict:
     ns = root.tag.split("}")[0].strip("{") if root.tag.startswith("{") else ""
     ET.register_namespace("", ns)
     tag = lambda t: f"{{{ns}}}{t}" if ns else t
-    common = {slug: cian_extra_urls(slug) for slug in ("zorge9", "b37")}
 
     total = enriched = added = 0
     for off in root.iter(tag("offer")):
@@ -52,8 +50,7 @@ def refresh(reuse_original: bool = False) -> dict:
         g = lot_view_groups(slug, iid)
         photos = ([(TYPE_INTERIOR, u) for u in g["interior"]]
                   + [(TYPE_VISUAL, u) for u in g["visualization"]]
-                  + [(TYPE_VIEW, u) for u in g["view"]]
-                  + [(TYPE_PHOTO, u) for u in common[slug]])
+                  + [(TYPE_VIEW, u) for u in g["view"]])
         if not photos:
             continue
         children = list(off)

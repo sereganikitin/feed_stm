@@ -26,7 +26,9 @@ from werkzeug.utils import secure_filename
 
 from .config import (PROJECTS, PUBLIC_BASE_URL, ADMIN_DIR, CACHE_DIR, project_dirs,
                      get_project, set_override, load_overrides,
-                     excluded_photos, add_excluded_photo)
+                     excluded_photos, add_excluded_photo, PHOTOS_YD_ONLY)
+
+_YD_ONLY_MSG = "Управление фото отключено: фото берутся только с Яндекс.Диска (добавляйте и удаляйте файлы там)."
 
 # Общий Я.Поиск фид (Зорге + Б37 одним файлом) — путь синхронен server.COMBINED_YR_PATH
 _COMBINED_YR = CACHE_DIR / "combined" / "yandex_realty.xml"
@@ -569,6 +571,9 @@ def views_sync_status(slug: str):
 def views_upload(slug: str, lot: str):
     if slug not in PROJECTS:
         abort(404)
+    if PHOTOS_YD_ONLY:
+        flash(_YD_ONLY_MSG)
+        return redirect(url_for("admin.views_page", slug=slug))
     lot = secure_filename(lot)
     dest = project_dirs(slug)["views"] / lot
     dest.mkdir(parents=True, exist_ok=True)
@@ -590,6 +595,9 @@ def views_upload(slug: str, lot: str):
 def views_delete(slug: str, lot: str):
     if slug not in PROJECTS:
         abort(404)
+    if PHOTOS_YD_ONLY:
+        flash(_YD_ONLY_MSG)
+        return redirect(url_for("admin.views_page", slug=slug))
     lot = secure_filename(lot)
     name = secure_filename(request.form.get("name", ""))
     vdir = project_dirs(slug)["views"] / lot
@@ -645,6 +653,9 @@ def save_settings(slug: str):
 def upload_photos(slug: str, kind: str):
     if slug not in PROJECTS or kind not in _KINDS:
         abort(404)
+    if PHOTOS_YD_ONLY:
+        flash(_YD_ONLY_MSG)
+        return redirect(url_for("admin.project", slug=slug))
     k = _KINDS[kind]
     extra = project_dirs(slug)[k["dir"]]
     order = list(get_project(slug).get(k["order_key"]) or _photos(slug, kind))
@@ -672,6 +683,9 @@ def upload_photos(slug: str, kind: str):
 def delete_photo(slug: str, kind: str):
     if slug not in PROJECTS or kind not in _KINDS:
         abort(404)
+    if PHOTOS_YD_ONLY:
+        flash(_YD_ONLY_MSG)
+        return redirect(url_for("admin.project", slug=slug))
     k = _KINDS[kind]
     name = secure_filename(request.form.get("name", ""))
     p = project_dirs(slug)[k["dir"]] / name
@@ -690,6 +704,8 @@ def delete_photo(slug: str, kind: str):
 def reorder_photos(slug: str, kind: str):
     if slug not in PROJECTS or kind not in _KINDS:
         abort(404)
+    if PHOTOS_YD_ONLY:
+        return (_YD_ONLY_MSG, 409)
     order = [secure_filename(n) for n in request.form.getlist("order") if n.strip()]
     set_override(slug, _KINDS[kind]["order_key"], order)
     _rebuild(slug, kind)

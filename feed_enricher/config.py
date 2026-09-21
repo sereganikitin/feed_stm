@@ -393,7 +393,10 @@ def file_ver(path) -> str:
         return "0"
 
 
-PHOTO_DUP_MAX_DIST = 8     # aHash 16×16 (256 бит): расстояние ≤ 8 — тот же кадр; похожие ракурсы (≥ ~15) остаются
+# Фото (виды, общие наборы) берём ТОЛЬКО с Я.Диска: ручные загрузки/порядок/чёрный список из
+# админки игнорируются и отключены (планировки и планы этажей — из ProfitBase, их не касается).
+PHOTOS_YD_ONLY = True
+PHOTO_DUP_MAX_DIST = 8    # aHash 16×16 (256 бит): расстояние ≤ 8 — тот же кадр; похожие ракурсы (≥ ~15) остаются
 _PHOTO_HASHES: dict = {}   # (путь, mtime_ns, размер) → aHash
 
 
@@ -430,6 +433,8 @@ def lot_view_groups(slug: str, internal_id: str) -> dict:
         return groups
     files = {"interior": [], "visualization": [], "view": []}
     for f in sorted(vdir.glob("*.jpg")):
+        if PHOTOS_YD_ONLY and f.name.startswith("u"):    # ручная загрузка через админку
+            continue
         key = ("interior" if f.name.startswith("int_")
                else "visualization" if f.name.startswith("vis_") else "view")
         files[key].append(f)
@@ -455,6 +460,8 @@ def lot_view_urls(slug: str, internal_id: str) -> list:
 
 def excluded_photos(slug: str, kind: str) -> set:
     """Имена фото, исключённых вручную в админке — не возвращать из ЯД и не показывать."""
+    if PHOTOS_YD_ONLY:
+        return set()
     return set(load_overrides().get(slug, {}).get("photos_excluded", {}).get(kind, []))
 
 
@@ -483,7 +490,7 @@ def get_project(slug: str) -> dict:
     """Эффективный конфиг проекта = PROJECTS[slug] + разрешённые оверрайды из админки."""
     base = dict(PROJECTS[slug])
     for k, v in load_overrides().get(slug, {}).items():
-        if k in EDITABLE_KEYS:
+        if k in EDITABLE_KEYS and not (PHOTOS_YD_ONLY and k.startswith("extra_photo_order")):
             base[k] = v
     return base
 

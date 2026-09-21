@@ -3,9 +3,10 @@
 Квартала Серебряный Бор дописаны наши фото с Я.Дисков (интерьер → визуализация → вид из
 окна) сразу после последней планировки.
 
-Наши фото отдаём с типом plan — сайт показывает такие картинки в галерее лота (в папках ЯД
-не только виды из окон). В ProfitBase часть этих же фото уже лежит в plan → чтобы на сайте
+Зорге: наши фото отдаём с типом plan — сайт показывает такие картинки в галерее лота (в папках
+ЯД не только виды из окон). В ProfitBase часть этих же фото уже лежит в plan → чтобы на сайте
 не было дублей, такие plan-картинки ProfitBase (совпадают по содержимому с нашими) убираем.
+Б37: в папках только виды → типы interior / visualization / view, plan ProfitBase не трогаем.
 Общие фото проекта не добавляем.
 
 Роут /feed/profitbase-site.xml ; триггер POST /refresh-site-feed.
@@ -27,7 +28,10 @@ ORIG = SITE_DIR / "profitbase_original.xml"
 OUT = SITE_DIR / "profitbase.xml"
 HASHES = SITE_DIR / "plan_hashes.json"     # кэш: URL plan-картинки ProfitBase → aHash
 
-IMG_TYPE = "plan"        # тип <image> для наших фото
+# Зорге: в папках ЯД не только виды, а сайт показывает plan в галерее → всё отдаём как plan
+# (+ дедупликация с plan ProfitBase). Остальные проекты (Б37: в папках только виды) — типы
+# по содержимому: interior / visualization / view.
+PLAN_TYPED_SLUGS = {"zorge9"}
 DUP_MAX_DIST = 8         # aHash 16×16 (256 бит): расстояние ≤ 8 — одна и та же картинка
 
 
@@ -99,9 +103,15 @@ def refresh(reuse_original: bool = False) -> dict:
         if not slug or not iid:
             continue
         g = lot_view_groups(slug, iid)
-        urls = g["interior"] + g["visualization"] + g["view"]
-        if not urls:
+        if slug in PLAN_TYPED_SLUGS:
+            items = [("plan", u) for u in g["interior"] + g["visualization"] + g["view"]]
+        else:
+            items = ([("interior", u) for u in g["interior"]]
+                     + [("visualization", u) for u in g["visualization"]]
+                     + [("view", u) for u in g["view"]])
+        if not items:
             continue
+        urls = [u for _, u in items]
         own = []
         for u in urls:
             p = CACHE_DIR / slug / "views" / iid / u.rsplit("/", 1)[-1]
@@ -109,16 +119,16 @@ def refresh(reuse_original: bool = False) -> dict:
                 own.append(_ahash(Image.open(p)))
             except Exception:
                 pass
-        work.append((off, urls, own))
+        work.append((off, items, own if slug in PLAN_TYPED_SLUGS else []))
 
     cache = _load_hashes()
-    plan_urls = [(c.text or "").strip() for off, _, _ in work for c in off if is_plan(c)]
+    plan_urls = [(c.text or "").strip() for off, _, own in work if own for c in off if is_plan(c)]
     _fetch_hashes(plan_urls, cache)
 
     # Проход 2: убираем plan ProfitBase, дублирующие наши фото; дописываем наши после последнего plan
     added = dups = 0
-    for off, urls, own in work:
-        for c in [c for c in off if is_plan(c)]:
+    for off, items, own in work:
+        for c in [c for c in off if is_plan(c)] if own else []:
             h = cache.get((c.text or "").strip())
             if h is not None and any(_dist(h, o) <= DUP_MAX_DIST for o in own):
                 off.remove(c)
@@ -137,8 +147,8 @@ def refresh(reuse_original: bool = False) -> dict:
             anchor_i = len(children) - 1
         anchor = children[anchor_i]
         pos = children.index(anchor) + 1
-        for url in urls:
-            el = ET.Element(tag("image"), {"type": IMG_TYPE})
+        for typ, url in items:
+            el = ET.Element(tag("image"), {"type": typ})
             el.text = url
             el.tail = anchor.tail
             off.insert(pos, el)

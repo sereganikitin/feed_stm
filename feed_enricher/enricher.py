@@ -184,13 +184,28 @@ def enrich_commercial(lot, plan_url: str, template_url: str, template_ext: str,
     return out_path
 
 
+def _lot_signature(proj: dict, lot: FeedLot) -> str:
+    """Хэш всех значений, которые попадают на планировку (план/этаж/площадь/комнаты/
+    башня/цена-для-рассрочки). Меняется — перерисовываем; не меняется — используем кэш."""
+    parts = [lot.plan_url, str(lot.floor), f"{lot.area_total:.2f}", str(lot.rooms), lot.house_name or ""]
+    if proj.get("installment"):
+        parts.append(str(lot.price))
+    return hashlib.md5("|".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
 def enrich_lot(slug: str, lot: FeedLot) -> Path:
-    """Создаёт обогащенную планировку для лота. Идемпотентно по id."""
+    """Создаёт обогащенную планировку для лота. Кэш по id, но перерисовывает, если
+    изменились план/этаж/площадь/комнаты/цена (см. _lot_signature) — иначе картинка
+    молча оставалась бы со старыми данными (был реальный баг: площадь с антресолью,
+    которую ProfitBase обновил в фиде, не долетала до уже нарисованной планировки)."""
     proj = get_project(slug)
     dirs = project_dirs(slug)
     layout = proj["layout"]
     out_path = dirs["enriched"] / f"{lot.internal_id}.png"
-    if out_path.exists():
+    sig_path = dirs["enriched"] / f"{lot.internal_id}.sig"
+    sig = _lot_signature(proj, lot)
+    cached_sig = sig_path.read_text("utf-8").strip() if sig_path.exists() else None
+    if out_path.exists() and cached_sig == sig:
         return out_path
 
     # Фон — шаблон (для Б37 свой под студии/квартиры), приведённый к нужному размеру
@@ -243,4 +258,5 @@ def enrich_lot(slug: str, lot: FeedLot) -> Path:
         _draw_field(draw, layout["monthly_pay"],  _money_short(monthly, "тыс"))
 
     canvas.convert("RGB").save(out_path, "PNG", optimize=True)
+    sig_path.write_text(sig, "utf-8")
     return out_path

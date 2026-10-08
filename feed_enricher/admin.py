@@ -267,13 +267,6 @@ _TAB_HTML = _CSS + """<title>{{cur.title}} — фиды</title>
  {% for m in health.missing %}<b>{{m.house}}</b> ({{m.lots}} лот.){% if not loop.last %}, {% endif %}{% endfor %}.
  Нужно добавить id корпуса в <code>yandex_house_ids</code> — иначе Яндекс Поиск отклонит эти лоты.</div>
 {% endif %}
-{% if st.get('missing_in_export') %}
-<div class=warn>⚠️ <b>Свободные лоты не попадают в фиды: {{st.missing_in_export|length}}.</b>
- В ProfitBase они в продаже, но ЦИАН-выгрузка ProfitBase их не отдаёт — поэтому их нет в ЦИАН, Яндексе и ДомКлике
- (и в Авито они без нашей планировки):
- {% for m in st.missing_in_export %}<b>{{m.number or m.id}}</b> ({{m.house}}{% if m.area %}, {{m.area}} м²{% endif %}, id {{m.id}}){% if not loop.last %}, {% endif %}{% endfor %}.
- Проверить в ProfitBase настройки ЦИАН-выгрузки (фильтры) и выгрузку на площадки в карточке лота.</div>
-{% endif %}
 
 <h2>Фиды для площадок</h2>
 <div class=feeds>

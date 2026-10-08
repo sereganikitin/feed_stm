@@ -92,6 +92,19 @@ def _sync_cian_photos(slug, dirs):
 
 _EURO_TTL = 600
 _euro_cache: dict = {}   # url -> (monotonic_ts, set(ExternalId))
+_pbx_cache: dict = {}    # url -> (monotonic_ts, корень profitbase_xml)
+
+
+def _pbx_root(url: str):
+    """Распарсенная Яндекс-выгрузка ProfitBase (profitbase_xml, ~16 МБ) — одна загрузка на
+    _EURO_TTL для всех проверок (европланировки, скидки, пропавшие из экспорта лоты)."""
+    now = time.monotonic()
+    hit = _pbx_cache.get(url)
+    if hit and now - hit[0] < _EURO_TTL:
+        return hit[1]
+    root = ET.fromstring(download_feed(url))
+    _pbx_cache[url] = (now, root)
+    return root
 
 
 def _euro_layout_ids(url: str) -> set:
@@ -100,7 +113,7 @@ def _euro_layout_ids(url: str) -> set:
     hit = _euro_cache.get(url)
     if hit and now - hit[0] < _EURO_TTL:
         return hit[1]
-    root = ET.fromstring(download_feed(url))
+    root = _pbx_root(url)
     ln = lambda t: t.split("}")[-1]
     ids = set()
     for o in root.iter():
@@ -127,7 +140,7 @@ def _euro_discount_prices(url: str) -> dict:
     hit = _euro_discount_cache.get(url)
     if hit and now - hit[0] < _EURO_TTL:
         return hit[1]
-    root = ET.fromstring(download_feed(url))
+    root = _pbx_root(url)
     ln = lambda t: t.split("}")[-1]
     prices: dict = {}
     for o in root.iter():
@@ -199,6 +212,37 @@ def _apply_euro_rooms(slug: str, lots: list):
             n += 1
     if n:
         print(f"[{slug}] европланировки: комнатность −1 у {n} лотов")
+
+
+def _missing_from_export(slug: str, lots: list):
+    """Свободные лоты проекта, которые есть в profitbase_xml, но не пришли в ЦИАН-выгрузку
+    ProfitBase (а значит, их нет в ЦИАН/Яндекс-фидах). Причина всегда на стороне ProfitBase —
+    фильтры экспорта или настройки лота; показываем в админке, чтобы не узнавать от коллег.
+    None — проверить не удалось (источник недоступен)."""
+    url = (PROJECTS.get(slug) or {}).get("euro_source_url")
+    if not url:
+        return None
+    from .site_feed import _slug_of
+    try:
+        root = _pbx_root(url)
+    except Exception as e:
+        print(f"[{slug}] euro-source недоступен, пропавшие лоты не проверяем: {e}")
+        return None
+    have = {l.internal_id for l in lots}
+    out = []
+    for o in root.iter():
+        if o.tag.split("}")[-1] != "offer":
+            continue
+        iid = o.get("internal-id") or ""
+        if (not iid or iid in have or (o.findtext("{*}status") or "").strip() != "AVAILABLE"
+                or _slug_of(o.findtext("{*}object/{*}name")) != slug):
+            continue
+        out.append({"id": iid, "number": (o.findtext("{*}number") or "").strip(),
+                    "house": (o.findtext("{*}house/{*}name") or "").strip(),
+                    "area": (o.findtext("{*}area/{*}value") or "").strip()})
+    if out:
+        print(f"[{slug}] свободных лотов нет в ЦИАН-выгрузке ProfitBase: {len(out)}")
+    return out
 
 
 # Общий фид «Яндекс Поиск Недвижимости» (metarealty/2024-12) по всем жилым проектам
@@ -326,6 +370,7 @@ def refresh_project(slug: str) -> dict:
         lots = parse_feed(original)
         _apply_euro_rooms(slug, lots)
         _apply_euro_discount(slug, lots)
+        missing = _missing_from_export(slug, lots)
         ok, fail = 0, 0
         for lot in lots:
             if not (lot.plan_url and lot.price and lot.area_total):
@@ -402,7 +447,8 @@ def refresh_project(slug: str) -> dict:
             sp = ADMIN_DIR / "status.json"
             statuses = json.loads(sp.read_text("utf-8")) if sp.exists() else {}
             statuses[slug] = {"ts": time.strftime("%Y-%m-%d %H:%M"),
-                              "enriched_ok": ok, "lots_total": len(lots)}
+                              "enriched_ok": ok, "lots_total": len(lots),
+                              "missing_in_export": missing}
             sp.write_text(json.dumps(statuses, ensure_ascii=False, indent=2), "utf-8")
         except Exception as e:
             print(f"[{slug}] status write failed: {e}")

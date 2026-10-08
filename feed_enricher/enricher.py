@@ -145,8 +145,14 @@ def _draw_field(draw: ImageDraw.ImageDraw, field: dict, text: str):
 def enrich_commercial(lot, plan_url: str, template_url: str, template_ext: str,
                       layout: dict, templates_dir: Path, plans_dir: Path, out_path: Path) -> Path:
     """Обогащённая планировка коммерческого помещения: шаблон Б37 + план + подписи
-    Площадь/Высота/Мощность (вместо Комнаты/Площадь/Этаж). Идемпотентно по out_path."""
-    if out_path.exists():
+    Площадь/Высота/Мощность (вместо Комнаты/Площадь/Этаж). Кэш по out_path, но
+    перерисовывает при изменении плана/площади/высоты/мощности (см. enrich_lot)."""
+    sig_path = out_path.with_suffix(".sig")
+    sig = hashlib.md5("|".join([
+        plan_url, str(lot.area), str(getattr(lot, "ceiling_m", None)), str(getattr(lot, "power_kw", None)),
+    ]).encode("utf-8")).hexdigest()[:16]
+    cached_sig = sig_path.read_text("utf-8").strip() if sig_path.exists() else None
+    if out_path.exists() and cached_sig == sig:
         return out_path
     canvas = _http_get_image(template_url, templates_dir / f"template.{template_ext}") \
         .convert("RGBA").resize(layout["size"], Image.LANCZOS)
@@ -181,6 +187,7 @@ def enrich_commercial(lot, plan_url: str, template_url: str, template_ext: str,
             _draw_field(draw, layout[key], val)
 
     canvas.convert("RGB").save(out_path, "PNG", optimize=True)
+    sig_path.write_text(sig, "utf-8")
     return out_path
 
 

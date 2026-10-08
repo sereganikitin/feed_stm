@@ -198,7 +198,6 @@ def _enriched(it, ext_id):
     for d in (ENR_DIR, TPL_DIR, PLANS_DIR):
         d.mkdir(parents=True, exist_ok=True)
     out = ENR_DIR / f"{ext_id}.png"
-    out.unlink(missing_ok=True)
     lot = types.SimpleNamespace(area=float(area), ceiling_m=ceiling,
                                 power_kw=str(power) if power else None)
     enrich_commercial(lot, plan_url, COMMERCIAL_TEMPLATE_ZORGE_URL,

@@ -154,7 +154,6 @@ def _enriched_url(obj, eid, area, ceiling, power):
     for d in (ENR_DIR, TPL_DIR, PLANS_DIR):
         d.mkdir(parents=True, exist_ok=True)
     out = ENR_DIR / f"{eid}.png"
-    out.unlink(missing_ok=True)   # всегда перерисовываем под актуальные данные
     lot = types.SimpleNamespace(area=float(area), ceiling_m=ceiling,
                                 power_kw=str(power) if power else None)
     enrich_commercial(lot, plan_url, COMMERCIAL_TEMPLATE_URL, COMMERCIAL_TEMPLATE_EXT,
